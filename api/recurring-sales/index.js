@@ -2,13 +2,13 @@
 import mysql from "mysql2/promise";
 
 export default async function handler(req, res) {
-  const db = await mysql.createConnection({
-    host: "db.webxperts.co.nz",
-    user: "u517327732_db_user",
-    // password: "77Breebbnz#",
-    database: "u517327732_db",
-    port: 3306
-  });
+const db = await mysql.createConnection({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT
+});
 
   try {
     if (req.method === "GET") {
