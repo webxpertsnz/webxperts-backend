@@ -1,0 +1,10 @@
+{
+  "name": "webxperts-backend",
+  "version": "1.0.0",
+  "description": "Backend API for WebXperts CRM",
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "mysql2": "^3.9.2"
+  }
+}
