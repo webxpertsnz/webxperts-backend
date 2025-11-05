@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   const db = await mysql.createConnection({
     host: "db.webxperts.co.nz",
     user: "u517327732_db_user",
-    // password: "add-your-password-here",
+    // password: "77Breebbnz#",
     database: "u517327732_db",
     port: 3306
   });
