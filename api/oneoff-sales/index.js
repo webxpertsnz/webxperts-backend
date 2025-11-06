@@ -1,7 +1,12 @@
-// /api/oneoff-sales/index.js
 import mysql from "mysql2/promise";
 
 export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") return res.status(200).end();
+
   const db = await mysql.createConnection({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -18,12 +23,12 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-      const { client_id, description, amount, quantity, unit_amount, status, sale_date, notes } = req.body;
+      const { client_id, description, amount, quantity, unit_amount, status="draft", sale_date, notes } = req.body;
       await db.query(
         `INSERT INTO oneoff_sales
          (client_id, description, amount, quantity, unit_amount, status, sale_date, notes, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-        [client_id, description, amount, quantity, unit_amount, status, sale_date, notes]
+        [client_id, description ?? "", amount ?? null, quantity ?? 1, unit_amount ?? 0, status, sale_date ?? null, notes ?? null]
       );
       return res.status(201).json({ message: "Sale created" });
     }
@@ -34,7 +39,7 @@ export default async function handler(req, res) {
         `UPDATE oneoff_sales
          SET description=?, amount=?, quantity=?, unit_amount=?, status=?, sale_date=?, notes=?, updated_at=NOW()
          WHERE id=?`,
-        [description, amount, quantity, unit_amount, status, sale_date, notes, id]
+        [description ?? "", amount ?? null, quantity ?? 1, unit_amount ?? 0, status ?? "draft", sale_date ?? null, notes ?? null, id]
       );
       return res.status(200).json({ message: "Sale updated" });
     }
