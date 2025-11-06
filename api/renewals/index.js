@@ -1,4 +1,4 @@
-import mysql from "mysql2/promise";
+import { getPool } from "../_lib/db.js";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -7,14 +7,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const db = await mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS,
-    database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT || 3306),
-    ssl: { rejectUnauthorized: false }
-  });
+  const db = getPool();
 
   try {
     if (req.method === "GET") {
@@ -23,7 +16,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-      const { client_id, service_type, item_label, renewal_date, cost, auto_renew=0, status="active" } = req.body;
+      const { client_id, service_type, item_label, renewal_date, cost, auto_renew=0, status="active" } = req.body || {};
       await db.query(
         `INSERT INTO renewals
          (client_id, service_type, item_label, renewal_date, cost, auto_renew, status, created_at)
@@ -34,7 +27,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PUT") {
-      const { id, renewal_date, cost, auto_renew, status } = req.body;
+      const { id, renewal_date, cost, auto_renew, status } = req.body || {};
       await db.query(
         `UPDATE renewals
          SET renewal_date=?, cost=?, auto_renew=?, status=?, updated_at=NOW()
@@ -45,7 +38,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
-      const { id } = req.body;
+      const { id } = req.body || {};
       await db.query("DELETE FROM renewals WHERE id=?", [id]);
       return res.status(200).json({ message: "Renewal deleted" });
     }
@@ -54,8 +47,6 @@ export default async function handler(req, res) {
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   } catch (err) {
     console.error("Renewals API Error:", err);
-    return res.status(500).json({ error: err.message || "Internal Server Error" });
-  } finally {
-    await db.end();
+    return res.status(500).json({ error: "Internal Server Error", detail: err.code || err.message });
   }
 }
