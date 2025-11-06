@@ -4,8 +4,8 @@ import mysql from "mysql2/promise";
 let pool;
 
 /**
- * Singleton pool reused in each serverless instance.
- * Keep connections at 1 to avoid Hostinger's ER_USER_LIMIT_REACHED.
+ * Reused pool per serverless instance.
+ * Keep connections at 1 to avoid ER_USER_LIMIT_REACHED.
  */
 export function getPool() {
   if (!pool) {
@@ -19,7 +19,7 @@ export function getPool() {
       waitForConnections: true,
       connectionLimit: 1,
       maxIdle: 1,
-      idleTimeout: 60000,
+      idleTimeout: 60_000,
       queueLimit: 0
     });
   }
