@@ -4,8 +4,8 @@ import mysql from "mysql2/promise";
 let pool;
 
 /**
- * Singleton pool reused inside each serverless function instance.
- * Keep the connection count at 1 to stay under Hostinger's user limit.
+ * Singleton pool reused in each serverless instance.
+ * Keep connections at 1 to avoid Hostinger's ER_USER_LIMIT_REACHED.
  */
 export function getPool() {
   if (!pool) {
@@ -17,7 +17,7 @@ export function getPool() {
       port: Number(process.env.DB_PORT || 3306),
       ssl: { rejectUnauthorized: false },   // Hostinger + Vercel
       waitForConnections: true,
-      connectionLimit: 1,   // <- the key change
+      connectionLimit: 1,
       maxIdle: 1,
       idleTimeout: 60000,
       queueLimit: 0
