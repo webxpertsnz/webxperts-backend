@@ -2,13 +2,14 @@
 import mysql from "mysql2/promise";
 
 export default async function handler(req, res) {
-const db = await mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT
-});
+  const db = await mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: process.env.DB_NAME,
+    port: Number(process.env.DB_PORT || 3306),
+    ssl: { rejectUnauthorized: false }
+  });
 
   try {
     if (req.method === "GET") {
@@ -18,16 +19,8 @@ const db = await mysql.createConnection({
 
     if (req.method === "POST") {
       const {
-        client_id,
-        product,
-        service_name,
-        amount,
-        quantity,
-        unit_amount,
-        description,
-        start_date,
-        end_date,
-        notes
+        client_id, product, service_name, amount,
+        quantity, unit_amount, description, start_date, end_date, notes
       } = req.body;
 
       await db.query(
@@ -41,16 +34,8 @@ const db = await mysql.createConnection({
 
     if (req.method === "PUT") {
       const {
-        id,
-        product,
-        service_name,
-        amount,
-        quantity,
-        unit_amount,
-        description,
-        start_date,
-        end_date,
-        notes
+        id, product, service_name, amount,
+        quantity, unit_amount, description, start_date, end_date, notes
       } = req.body;
 
       await db.query(
@@ -69,10 +54,10 @@ const db = await mysql.createConnection({
     }
 
     res.setHeader("Allow", ["GET", "POST", "PUT", "DELETE"]);
-    res.status(405).end(`Method ${req.method} Not Allowed`);
+    return res.status(405).end(`Method ${req.method} Not Allowed`);
   } catch (err) {
     console.error("Recurring Sales API Error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({ error: err.message || "Internal Server Error" });
   } finally {
     await db.end();
   }
