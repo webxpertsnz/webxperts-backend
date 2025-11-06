@@ -29,16 +29,17 @@ const rowAmount = r =>
    : Number(r.quantity || 0) * Number(r.unit_amount || 0)) || 0;
 
 export default async function handler(req, res) {
-  // CORS (allow your CRM domain or keep * while testing)
+  // CORS + caching
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Max-Age", "86400");
+  res.setHeader("Cache-Control", "no-store"); // avoid stale values in browsers/CDN
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ error: "Method Not Allowed" });
 
   const pool = getPool();
-  const conn = await pool.getConnection(); // reuse one connection for all queries
+  const conn = await pool.getConnection(); // ONE connection for everything in this request
   try {
     const now = new Date();
     const today   = ymd(now);
@@ -46,7 +47,7 @@ export default async function handler(req, res) {
     const sMonth  = firstOfMonth(now);
     const eMonth  = lastOfMonth(now);
 
-    // --- One-off sums (pure SQL) ---
+    // ---- ONE-OFF sums (pure SQL) ----
     const [[oneoffYTD]] = await conn.query(
       `SELECT COALESCE(SUM(
          CASE WHEN amount IS NOT NULL THEN amount
@@ -75,7 +76,7 @@ export default async function handler(req, res) {
        FROM oneoff_sales WHERE LOWER(status)='draft'`
     );
 
-    // --- Recurring rows (calc monthly inclusion in JS) ---
+    // ---- RECURRING rows (JS decides month inclusion for accuracy) ----
     const [recurring] = await conn.query(
       `SELECT id, amount, quantity, unit_amount, start_date, end_date, active, billing_cycle
        FROM recurring_sales`
@@ -84,7 +85,7 @@ export default async function handler(req, res) {
       recurring.filter(r => isActiveInMonth(r, monthDate))
                .reduce((a, r) => a + rowAmount(r), 0);
 
-    // Recurring YTD by month from FY start
+    // recurring totals
     let recurringYTD = 0;
     for (let cursor = firstOfMonth(fyStart);
          cursor <= eMonth;
@@ -93,14 +94,24 @@ export default async function handler(req, res) {
     }
     const recurringMonth = sumRecurringForMonth(now);
 
-    // --- Counts ---
-    const [[activeClients]] = await conn.query(`SELECT COUNT(*) AS c FROM clients WHERE LOWER(status)='active'`);
-    const [[openTasks]]    = await conn.query(`SELECT COUNT(*) AS c FROM tasks   WHERE LOWER(status)='open'`);
+    // ---- COUNTS ----
+    // Treat NULL/'' as "active"; exclude only inactive/archived/closed
+    const [[activeClients]] = await conn.query(`
+      SELECT COUNT(*) AS c
+      FROM clients
+      WHERE COALESCE(NULLIF(TRIM(LOWER(status)), ''), 'active')
+            NOT IN ('inactive','archived','closed')
+    `);
+    const [[openTasks]] = await conn.query(`
+      SELECT COUNT(*) AS c
+      FROM tasks
+      WHERE LOWER(status)='open'
+    `);
 
-    // --- Final numbers ---
+    // ---- FINAL NUMBERS ----
     const ytd = Number(oneoffYTD.total) + Number(recurringYTD);
-    const incomeThisMonth = Number(oneoffThisMonth.total) + Number(recurringMonth);
-    const gstThisMonth = incomeThisMonth * 0.15;
+    const monthlyIncome = Number(oneoffThisMonth.total) + Number(recurringMonth);
+    const gstThisMonth = monthlyIncome * 0.15;
 
     // Expected income to March (project recurring only for remaining months)
     const m = now.getMonth(); // 0..11
@@ -118,6 +129,7 @@ export default async function handler(req, res) {
       cards: {
         expectedIncome,
         ytd,
+        monthlyIncome,          // <— NEW
         gstThisMonth,
         draftsTotal: Number(draftsTotal.total),
         activeClients: activeClients.c,
