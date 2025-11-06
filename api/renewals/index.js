@@ -1,7 +1,12 @@
-// /api/renewals/index.js
 import mysql from "mysql2/promise";
 
 export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") return res.status(200).end();
+
   const db = await mysql.createConnection({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -18,12 +23,12 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-      const { client_id, service_type, item_label, renewal_date, cost, auto_renew, status } = req.body;
+      const { client_id, service_type, item_label, renewal_date, cost, auto_renew=0, status="active" } = req.body;
       await db.query(
         `INSERT INTO renewals
          (client_id, service_type, item_label, renewal_date, cost, auto_renew, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-        [client_id, service_type, item_label, renewal_date, cost, auto_renew, status]
+        [client_id, service_type ?? "other", item_label ?? "", renewal_date ?? null, cost ?? 0, auto_renew ? 1 : 0, status]
       );
       return res.status(201).json({ message: "Renewal added" });
     }
@@ -34,7 +39,7 @@ export default async function handler(req, res) {
         `UPDATE renewals
          SET renewal_date=?, cost=?, auto_renew=?, status=?, updated_at=NOW()
          WHERE id=?`,
-        [renewal_date, cost, auto_renew, status, id]
+        [renewal_date ?? null, cost ?? 0, auto_renew ? 1 : 0, status ?? "active", id]
       );
       return res.status(200).json({ message: "Renewal updated" });
     }
