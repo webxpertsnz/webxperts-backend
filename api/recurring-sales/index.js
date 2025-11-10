@@ -41,11 +41,14 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PUT") {
-      const { id } = req.params || {};  // Note: Vercel API routes use req.query.id if no params, but assume body.id
       const body = req.body || {};
+      const id = body.id;  // FIXED: Get id from body (frontend sends it there)
 
       // Log for debugging (check Vercel logs if issues)
       console.log('PUT recurring-sales body:', body);
+      if (!id) {
+        return res.status(400).json({ error: 'ID required in body' });
+      }
 
       // ONLY allow these fields to prevent ER_BAD_FIELD_ERROR
       const allowedFields = ['description', 'service_name', 'amount', 'start_date', 'end_date', 'product', 'quantity', 'unit_amount', 'notes'];
