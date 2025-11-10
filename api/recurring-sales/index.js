@@ -11,8 +11,18 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
-      const [rows] = await db.query("SELECT * FROM recurring_sales ORDER BY id DESC");
-      return res.status(200).json(rows);
+      if (req.query.client_id) {
+        // New: Support GET by client_id for frontend
+        const [rows] = await db.query(
+          "SELECT * FROM recurring_sales WHERE client_id = ? ORDER BY id DESC",
+          [req.query.client_id]
+        );
+        return res.status(200).json(rows);
+      } else {
+        // Original: Global GET
+        const [rows] = await db.query("SELECT * FROM recurring_sales ORDER BY id DESC");
+        return res.status(200).json(rows);
+      }
     }
 
     if (req.method === "POST") {
@@ -31,18 +41,46 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PUT") {
-      const {
-        id, product, service_name, amount, description,
-        quantity, unit_amount, start_date, end_date, notes
-      } = req.body || {};
+      const { id } = req.params || {};
+      const body = req.body || {};
 
-      await db.query(
-        `UPDATE recurring_sales
-         SET product=?, service_name=?, amount=?, description=?, quantity=?, unit_amount=?, start_date=?, end_date=?, notes=?, updated_at=NOW()
-         WHERE id=?`,
-        [product ?? "", service_name ?? "", amount ?? 0, description ?? "", quantity ?? 1, unit_amount ?? 0, start_date ?? null, end_date ?? null, notes ?? null, id]
-      );
-      return res.status(200).json({ message: "Recurring sale updated" });
+      // Log for debugging (check Vercel logs if issues)
+      console.log('PUT recurring-sales body:', body);
+
+      // ONLY allow these fields to prevent ER_BAD_FIELD_ERROR
+      const allowedFields = ['description', 'service_name', 'amount', 'start_date', 'end_date', 'product', 'quantity', 'unit_amount', 'notes'];
+      const updateData = {};
+      for (const [key, value] of Object.entries(body)) {
+        if (allowedFields.includes(key)) {
+          updateData[key] = value;
+        }
+      }
+
+      // Build safe SQL (no updated_at, since table doesn't have it)
+      let sql = 'UPDATE recurring_sales SET ';
+      const updates = [];
+      const values = [];
+      for (const [key, value] of Object.entries(updateData)) {
+        updates.push(`${key} = ?`);
+        values.push(value);
+      }
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      sql += updates.join(', ') + ' WHERE id = ?';
+      values.push(id);
+
+      console.log('SQL:', sql); // Log SQL
+      console.log('Values:', values); // Log values
+
+      const [result] = await db.execute(sql, values);
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Record not found' });
+      }
+
+      // Return the updated record
+      const [rows] = await db.query('SELECT * FROM recurring_sales WHERE id = ?', [id]);
+      return res.status(200).json(rows[0]);
     }
 
     if (req.method === "DELETE") {
