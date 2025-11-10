@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PUT") {
-      const { id } = req.params || {};
+      const { id } = req.params || {};  // Note: Vercel API routes use req.query.id if no params, but assume body.id
       const body = req.body || {};
 
       // Log for debugging (check Vercel logs if issues)
@@ -52,11 +52,12 @@ export default async function handler(req, res) {
       const updateData = {};
       for (const [key, value] of Object.entries(body)) {
         if (allowedFields.includes(key)) {
-          updateData[key] = value;
+          // FIX: Convert '' or undefined to null (esp for dates/notes)
+          updateData[key] = (value === '' || value === undefined || value === null) ? null : value;
         }
       }
 
-      // Build safe SQL (no updated_at, since table doesn't have it)
+      // Build safe SQL
       let sql = 'UPDATE recurring_sales SET ';
       const updates = [];
       const values = [];
@@ -71,7 +72,7 @@ export default async function handler(req, res) {
       values.push(id);
 
       console.log('SQL:', sql); // Log SQL
-      console.log('Values:', values); // Log values
+      console.log('Values:', values); // Log values (now null-safe)
 
       const [result] = await db.execute(sql, values);
       if (result.affectedRows === 0) {
