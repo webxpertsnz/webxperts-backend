@@ -1,6 +1,7 @@
 import { getPool } from "../lib/db.js";
 
 export default async function handler(req, res) {
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -10,25 +11,25 @@ export default async function handler(req, res) {
   const db = getPool();
 
   try {
-    // GET: list all renewals
+    // GET – list all renewals
     if (req.method === "GET") {
       const [rows] = await db.query(
-        "SELECT * FROM renewals ORDER BY renewal_date DESC"
+        "SELECT * FROM renewals ORDER BY renewal_date ASC, item_label ASC"
       );
       return res.status(200).json(rows);
     }
 
-    // POST: create renewal
+    // POST – create renewal
     if (req.method === "POST") {
       const {
         client_id,
         service_type,
         item_label,
+        provider,
         renewal_date,
         cost,
         auto_renew = 0,
         status = "active",
-        provider,      // NEW
       } = req.body || {};
 
       await db.query(
@@ -36,54 +37,73 @@ export default async function handler(req, res) {
          (client_id, service_type, item_label, provider, renewal_date, cost, auto_renew, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
-          client_id,
-          service_type ?? "other",
-          item_label ?? "",
-          provider ?? null,
-          renewal_date ?? null,
+          client_id || null,
+          service_type || "domain",
+          item_label || "",
+          provider || null,
+          renewal_date || null,
           cost ?? 0,
           auto_renew ? 1 : 0,
           status,
         ]
       );
+
       return res.status(201).json({ message: "Renewal added" });
     }
 
-    // PUT: update renewal
+    // PUT – update renewal (INCLUDING client_id + provider)
     if (req.method === "PUT") {
       const {
         id,
+        client_id,
+        service_type,
+        item_label,
+        provider,
         renewal_date,
         cost,
         auto_renew,
         status,
-        provider,
       } = req.body || {};
+
+      if (!id) {
+        return res.status(400).json({ error: "Missing id for update" });
+      }
 
       await db.query(
         `UPDATE renewals
-         SET renewal_date = ?,
+         SET client_id = ?,
+             service_type = ?,
+             item_label   = ?,
+             provider     = ?,
+             renewal_date = ?,
              cost         = ?,
              auto_renew   = ?,
              status       = ?,
-             provider     = ?,
              updated_at   = NOW()
          WHERE id = ?`,
         [
-          renewal_date ?? null,
+          client_id || null,
+          service_type || "domain",
+          item_label || "",
+          provider || null,
+          renewal_date || null,
           cost ?? 0,
           auto_renew ? 1 : 0,
-          status ?? "active",
-          provider ?? null,
+          status || "active",
           id,
         ]
       );
+
       return res.status(200).json({ message: "Renewal updated" });
     }
 
-    // DELETE: delete renewal
+    // DELETE – remove renewal
     if (req.method === "DELETE") {
       const { id } = req.body || {};
+      if (!id) {
+        return res.status(400).json({ error: "Missing id for delete" });
+      }
+
       await db.query("DELETE FROM renewals WHERE id = ?", [id]);
       return res.status(200).json({ message: "Renewal deleted" });
     }
