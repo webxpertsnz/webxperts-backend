@@ -33,7 +33,7 @@ export default async function handler(req, res) {
   try {
     /* ---------- GET: list projects ---------- */
     if (req.method === "GET") {
-      const { status, month } = req.query || {};
+      const { status, month, client_id } = req.query || {};
 
       let sql = `
         SELECT p.*, c.company AS client_name
@@ -47,6 +47,12 @@ export default async function handler(req, res) {
         sql += " AND p.completed = 0";
       } else if (status === "completed") {
         sql += " AND p.completed = 1";
+      }
+
+      // filter by client id (for client details page)
+      if (client_id) {
+        sql += " AND p.client_id = ?";
+        params.push(Number(client_id));
       }
 
       if (status === "completed" && typeof month === "string" && /^\d{4}-\d{2}$/.test(month)) {
@@ -132,9 +138,30 @@ export default async function handler(req, res) {
         ? Math.max(0, Math.min(100, progressValRaw))
         : 0;
 
-      const clientIdVal = client_id ? Number(client_id) : null;
+      let clientIdVal = client_id ? Number(client_id) : null;
       const manualName = client_name_manual ? String(client_name_manual).trim() : null;
       const alloc = (allocated_to && String(allocated_to).trim()) || "Unassigned";
+
+      // 🔄 AUTO-CREATE CLIENT IF NEEDED
+      if (!clientIdVal && manualName) {
+        // Try find existing client with same company name
+        const [existing] = await db.query(
+          "SELECT id FROM clients WHERE company = ? LIMIT 1",
+          [manualName]
+        );
+        if (existing.length) {
+          clientIdVal = existing[0].id;
+        } else {
+          // Create a minimal client row
+          const [clientResult] = await db.query(
+            `INSERT INTO clients
+               (name, company, contact_name, email, phone, address1, city, status, website, notes, created_at)
+             VALUES (?, ?, '', '', '', '', '', 'active', '', '', NOW())`,
+            [manualName, manualName]
+          );
+          clientIdVal = clientResult.insertId;
+        }
+      }
 
       const [result] = await db.query(
         `INSERT INTO projects
