@@ -475,16 +475,16 @@ function describeBacklinkType(name) {
   return "These backlinks contribute to your overall authority and help search engines discover and trust your website.";
 }
 
-// NEW: icon for backlink section headings
+// SAFE ASCII "icons" for backlink headings
 function getBacklinkIcon(name) {
   const lower = name.toLowerCase();
-  if (lower.includes("profile")) return "👤🔗";
-  if (lower.includes("web 2.0")) return "🌐🔗";
-  if (lower.includes("syndication")) return "📡🔗";
-  if (lower.includes("article")) return "📄🔗";
-  if (lower.includes("social bookmarking")) return "🔖🔗";
-  if (lower.includes("all backlinks")) return "🔗";
-  return "🔗";
+  if (lower.includes("profile")) return "[Profile]";
+  if (lower.includes("web 2.0")) return "[Web 2.0]";
+  if (lower.includes("syndication")) return "[Syndication]";
+  if (lower.includes("article")) return "[Article]";
+  if (lower.includes("social bookmarking")) return "[Social]";
+  if (lower.includes("all backlinks")) return "[All]";
+  return "[Links]";
 }
 
 // ---------- PDF generation ----------
@@ -719,12 +719,10 @@ async function buildSeoPdf(res, summary) {
   doc.moveDown(0.5);
   doc.fontSize(11).font("Helvetica").fillColor("#333333");
 
-  const prevPage1 = hasPrevData ? top10Prev : null;
   const page1Change =
     hasPrevData && prevPage1 !== null
       ? page1Count - prevPage1
       : null;
-  const top3Count = pos1Count + pos2Count + pos3Count;
 
   const krLines = [];
   krLines.push(`Total tracked keywords: ${tracked}.`);
@@ -899,7 +897,7 @@ async function buildSeoPdf(res, summary) {
     if (doc.y > bottomLimitStart) {
       doc.addPage();
     } else {
-      // extra breathing room
+      // extra breathing room so it isn't cramped under the table
       doc.moveDown(2.0);
     }
 
@@ -940,7 +938,7 @@ async function buildSeoPdf(res, summary) {
       }
 
       const icon = getBacklinkIcon(section.name);
-      const headingText = `${icon}  ${section.name}`;
+      const headingText = `${icon} ${section.name}`;
 
       doc
         .fontSize(13)
@@ -985,7 +983,6 @@ async function buildSeoPdf(res, summary) {
         doc.text(line, { width: contentWidth });
       });
 
-      // +X more note if we capped
       if (section.total > maxLinksToShow) {
         const remaining = section.total - maxLinksToShow;
         if (doc.y > bottomLimit) {
@@ -1002,7 +999,7 @@ async function buildSeoPdf(res, summary) {
       }
 
       doc.moveDown(0.35);
-      // description: bold + italic
+      // bold + italic description
       doc
         .fontSize(9)
         .font("Helvetica-BoldOblique")
