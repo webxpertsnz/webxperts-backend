@@ -475,6 +475,18 @@ function describeBacklinkType(name) {
   return "These backlinks contribute to your overall authority and help search engines discover and trust your website.";
 }
 
+// NEW: icon for backlink section headings
+function getBacklinkIcon(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("profile")) return "👤🔗";
+  if (lower.includes("web 2.0")) return "🌐🔗";
+  if (lower.includes("syndication")) return "📡🔗";
+  if (lower.includes("article")) return "📄🔗";
+  if (lower.includes("social bookmarking")) return "🔖🔗";
+  if (lower.includes("all backlinks")) return "🔗";
+  return "🔗";
+}
+
 // ---------- PDF generation ----------
 async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
@@ -595,7 +607,7 @@ async function buildSeoPdf(res, summary) {
     .fill("#ffffff")
     .restore();
 
-  // --- NEW: logos above the 3 cards ---
+  // Logos above cards
   const logoWidth = 80;
   const logoY = heroHeight + 8;
 
@@ -630,7 +642,6 @@ async function buildSeoPdf(res, summary) {
   ];
 
   let cardIndex = 0;
-  // push cards slightly lower to give space under logos
   const cardTopY = heroHeight + 60;
 
   metricCards.forEach((card) => {
@@ -662,11 +673,10 @@ async function buildSeoPdf(res, summary) {
     cardIndex++;
   });
 
-  // Push Executive Summary a bit further down from the cards
   const yAfterCards = cardTopY + cardHeight + 45;
   doc.y = yAfterCards;
 
-  // ---------- Executive Summary heading ----------
+  // Executive Summary heading
   doc
     .fontSize(16)
     .font("Helvetica-Bold")
@@ -709,10 +719,12 @@ async function buildSeoPdf(res, summary) {
   doc.moveDown(0.5);
   doc.fontSize(11).font("Helvetica").fillColor("#333333");
 
+  const prevPage1 = hasPrevData ? top10Prev : null;
   const page1Change =
     hasPrevData && prevPage1 !== null
       ? page1Count - prevPage1
       : null;
+  const top3Count = pos1Count + pos2Count + pos3Count;
 
   const krLines = [];
   krLines.push(`Total tracked keywords: ${tracked}.`);
@@ -769,7 +781,7 @@ async function buildSeoPdf(res, summary) {
     doc.text("• " + line, { width: contentWidth });
   });
 
-  // Extra breathing room before Backlinks & Authority
+  // Backlinks and Authority summary
   if (backlinks && backlinks.totalBacklinks) {
     doc.moveDown(2.0);
     doc
@@ -877,9 +889,7 @@ async function buildSeoPdf(res, summary) {
   });
 
   // ======================================================
-  // BACKLINKS OVERVIEW + FULL DETAILS
-  // Start on SAME page right after keyword table (if there is room),
-  // otherwise move to the next page. List *all* links.
+  // BACKLINKS OVERVIEW + SECTION DETAILS (CAPPED AT 10)
   // ======================================================
   if (backlinks && backlinks.sections && backlinks.sections.length) {
     const { totalBacklinks, sections } = backlinks;
@@ -889,11 +899,10 @@ async function buildSeoPdf(res, summary) {
     if (doc.y > bottomLimitStart) {
       doc.addPage();
     } else {
-      // MORE GAP here so it isn't cramped under the rankings
+      // extra breathing room
       doc.moveDown(2.0);
     }
 
-    // Backlinks Overview heading
     doc
       .fontSize(16)
       .font("Helvetica-Bold")
@@ -923,17 +932,21 @@ async function buildSeoPdf(res, summary) {
 
     doc.moveDown(1.0);
 
-    // FULL details – list all links, flowing across pages as needed
+    const maxLinksToShow = 10;
+
     sections.forEach((section, idx) => {
       if (doc.y > doc.page.height - doc.page.margins.bottom - 80) {
         doc.addPage();
       }
 
+      const icon = getBacklinkIcon(section.name);
+      const headingText = `${icon}  ${section.name}`;
+
       doc
         .fontSize(13)
         .font("Helvetica-Bold")
         .fillColor("#000000")
-        .text(section.name, left, doc.y);
+        .text(headingText, left, doc.y);
 
       doc.moveDown(0.35);
       doc
@@ -941,7 +954,7 @@ async function buildSeoPdf(res, summary) {
         .font("Helvetica")
         .fillColor("#333333")
         .text(
-          `Total links: ${section.total}. Listing all links below:`,
+          `Total links: ${section.total}. Showing up to ${maxLinksToShow} links below:`,
           { width: contentWidth }
         );
       doc.moveDown(0.3);
@@ -950,7 +963,10 @@ async function buildSeoPdf(res, summary) {
         doc.page.height - doc.page.margins.bottom - 40;
 
       doc.fontSize(9).font("Helvetica").fillColor("#000000");
-      section.rows.forEach((row, i) => {
+
+      const toShow = Math.min(section.rows.length, maxLinksToShow);
+
+      section.rows.slice(0, toShow).forEach((row, i) => {
         const url = row.backlink || row.target || "";
         const statusText = row.status ? ` [${row.status}]` : "";
         const line = `${i + 1}. ${String(url)}${statusText}`;
@@ -961,7 +977,7 @@ async function buildSeoPdf(res, summary) {
             .fontSize(13)
             .font("Helvetica-Bold")
             .fillColor("#000000")
-            .text(section.name + " (cont.)", left, doc.y);
+            .text(headingText + " (cont.)", left, doc.y);
           doc.moveDown(0.3);
           doc.fontSize(9).font("Helvetica").fillColor("#000000");
         }
@@ -969,10 +985,27 @@ async function buildSeoPdf(res, summary) {
         doc.text(line, { width: contentWidth });
       });
 
+      // +X more note if we capped
+      if (section.total > maxLinksToShow) {
+        const remaining = section.total - maxLinksToShow;
+        if (doc.y > bottomLimit) {
+          doc.addPage();
+        }
+        doc
+          .moveDown(0.2)
+          .fontSize(9)
+          .font("Helvetica-Oblique")
+          .fillColor("#555555")
+          .text(`+ ${remaining} more links in this category.`, {
+            width: contentWidth
+          });
+      }
+
       doc.moveDown(0.35);
+      // description: bold + italic
       doc
         .fontSize(9)
-        .font("Helvetica")
+        .font("Helvetica-BoldOblique")
         .fillColor("#444444")
         .text(
           "What this means: " + describeBacklinkType(section.name),
