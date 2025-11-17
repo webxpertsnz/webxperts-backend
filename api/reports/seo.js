@@ -451,6 +451,30 @@ function formatDateNZ(info) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+// small helper to describe backlink types
+function describeBacklinkType(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("profile")) {
+    return "Profile backlinks are links from profile pages on business listings or social platforms. They help build brand signals and basic authority.";
+  }
+  if (lower.includes("web 2.0")) {
+    return "Web 2.0 backlinks come from content published on hosted blog platforms. They support topical relevance and can drive referral traffic.";
+  }
+  if (lower.includes("syndication")) {
+    return "Syndication backlinks are created when your content is republished on other sites, spreading your brand and earning contextual links.";
+  }
+  if (lower.includes("article")) {
+    return "Article submission backlinks are links gained from publishing articles on external sites, usually with contextual anchor text.";
+  }
+  if (lower.includes("social bookmarking")) {
+    return "Social bookmarking backlinks are links from bookmarking sites where your content is saved and shared, helping with discovery and indexing.";
+  }
+  if (lower.includes("all backlinks")) {
+    return "This section summarises all backlinks recorded in your workbook across every campaign type.";
+  }
+  return "These backlinks contribute to your overall authority and help search engines discover and trust your website.";
+}
+
 // ---------- PDF generation (branded layout) ----------
 async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
@@ -491,8 +515,8 @@ async function buildSeoPdf(res, summary) {
   // --- Brand colours ---
   const brandDark = "#222222";
   const brandBlue = "#1976d2";
-  const brandRed = "#e53935";
   const brandGreen = "#43a047";
+  const brandOrange = "#fb8c00";
 
   const pageWidth = doc.page.width;
   const left = doc.page.margins.left;
@@ -582,7 +606,7 @@ async function buildSeoPdf(res, summary) {
     .fill("#ffffff")
     .restore();
 
-  // Metric cards (3 per row)
+  // Metric cards (only 3)
   const cardGap = 10;
   const cardsPerRow = 3;
   const cardWidth = (contentWidth - cardGap * (cardsPerRow - 1)) / cardsPerRow;
@@ -595,44 +619,16 @@ async function buildSeoPdf(res, summary) {
       color: brandBlue
     },
     {
-      label: "Number of keywords on page 1",
+      label: "Keywords on page 1",
       value: `${page1Count}/${tracked}`,
       color: brandGreen
     },
     {
-      label: "Top 10 visibility",
-      value: `${top10Pct}%`,
-      color: brandRed
-    },
-    {
       label: "Keywords in top position",
       value: pos1Count.toString(),
-      color: brandBlue
-    },
-    {
-      label: "Keywords in 2nd position",
-      value: pos2Count.toString(),
-      color: brandGreen
-    },
-    {
-      label: "Keywords in 3rd position",
-      value: pos3Count.toString(),
-      color: brandRed
-    },
-    {
-      label: "Median position",
-      value: medianCurrent.toFixed(1),
-      color: brandBlue
+      color: brandOrange
     }
   ];
-
-  if (backlinks && backlinks.totalBacklinks) {
-    metricCards.push({
-      label: "Backlinks in workbook",
-      value: backlinks.totalBacklinks.toString(),
-      color: brandGreen
-    });
-  }
 
   let cardIndex = 0;
   const cardTopY = heroHeight + 30;
@@ -670,17 +666,17 @@ async function buildSeoPdf(res, summary) {
     cardIndex++;
   });
 
-  const cardRows = Math.ceil(metricCards.length / cardsPerRow);
+  const cardRows = Math.ceil(metricCards.length / cardsPerRow); // 1 row now
   let yAfterCards =
-    cardTopY + cardRows * (cardHeight + cardGap) + 20;
+    cardTopY + cardRows * (cardHeight + cardGap) + 15;
 
-  // Logo near bottom-right & Google logo bottom-left (if present)
+  // Google logo bottom-left (smaller) & WebXperts logo bottom-right
   if (fs.existsSync(googleLogoPath)) {
-    doc.image(googleLogoPath, left, doc.page.height - 100, { width: 120 });
+    doc.image(googleLogoPath, left, doc.page.height - 90, { width: 80 });
   }
 
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, right - 140, doc.page.height - 100, { width: 120 });
+    doc.image(logoPath, right - 120, doc.page.height - 95, { width: 110 });
   }
 
   // footer line on page 1
@@ -718,11 +714,13 @@ async function buildSeoPdf(res, summary) {
   if (hasPrevData && performanceDeltaPct > 0) {
     doc.text(
       `This month’s SEO performance shows ${performanceTrend} in key metrics. ` +
-        `Performance ${performanceDirection} by approximately ${performanceDeltaPct}% compared to last week.`
+        `Performance ${performanceDirection} by approximately ${performanceDeltaPct}% compared to last week.`,
+      { width: contentWidth }
     );
   } else {
     doc.text(
-      "This month’s SEO performance establishes a baseline for ongoing tracking. Previous-week comparison data is not available in this workbook."
+      "This month’s SEO performance establishes a baseline for ongoing tracking. Previous-week comparison data is not available in this workbook.",
+      { width: contentWidth }
     );
   }
 
@@ -732,7 +730,7 @@ async function buildSeoPdf(res, summary) {
     ? `We currently hold ${page1Count} positions on the first page of Google for targeted keywords, with ${newTop10} new top-10 rankings achieved since last week.`
     : `We currently hold ${page1Count} positions on the first page of Google for targeted keywords.`;
 
-  doc.text(summaryLine);
+  doc.text(summaryLine, { width: contentWidth });
 
   // Keyword Rankings subsection
   doc.moveDown(0.8);
@@ -841,13 +839,13 @@ async function buildSeoPdf(res, summary) {
   const headerY = doc.y;
   const xCheck = left;
   const xKeyword = left + 18;
-  const xCurrent = left + 260;
-  const xPrev = left + 370;
+  const xCurrent = left + 310;
+  const xPrev = left + 420;
 
   // Header row
   doc.fontSize(11).fillColor("#000000");
   doc.text("Keyword List", xKeyword, headerY);
-  doc.text("Position on Google", xCurrent, headerY);
+  doc.text("Position", xCurrent, headerY);
   doc.text("Last week", xPrev, headerY);
 
   doc.moveDown(0.5);
@@ -861,31 +859,22 @@ async function buildSeoPdf(res, summary) {
     const yH = doc.y;
     doc.fontSize(11).fillColor("#000000");
     doc.text("Keyword List", xKeyword, yH);
-    doc.text("Position on Google", xCurrent, yH);
+    doc.text("Position", xCurrent, yH);
     doc.text("Last week", xPrev, yH);
     doc.moveDown(0.5);
     y = doc.y + 2;
     doc.fontSize(10).fillColor("#333333");
   };
 
-  keywords.forEach((k, index) => {
+  keywords.forEach((k) => {
     // page break
     if (y > doc.page.height - doc.page.margins.bottom - 30) {
       doc.addPage();
       drawHeaderRow();
     }
 
-    // checkbox square
-    doc
-      .save()
-      .rect(xCheck, y + 4, 8, 8)
-      .strokeColor("#aaaaaa")
-      .lineWidth(1)
-      .stroke()
-      .restore();
-
-    // tick
-    doc.fontSize(8).fillColor("#555555").text("✓", xCheck + 1, y + 2);
+    // green tick (no checkbox square)
+    doc.fontSize(11).fillColor(brandGreen).text("✓", xCheck, y + 2);
 
     // keyword text
     doc.fontSize(10).fillColor("#333333");
@@ -929,10 +918,10 @@ async function buildSeoPdf(res, summary) {
         `Total backlinks in this workbook: ${backlinks.totalBacklinks}`,
         { width: contentWidth }
       );
-    doc.moveDown(0.5);
+    doc.moveDown(0.3);
 
     backlinks.sections.forEach((section, idx) => {
-      if (idx > 0) doc.moveDown(0.5);
+      if (idx > 0) doc.moveDown(0.2);
       doc.fontSize(12).fillColor("#000000").text(section.name);
       doc
         .fontSize(10)
@@ -949,7 +938,7 @@ async function buildSeoPdf(res, summary) {
         .fontSize(16)
         .fillColor("#000000")
         .text(section.name, left, doc.y, { underline: true });
-      doc.moveDown(0.5);
+      doc.moveDown(0.4);
 
       doc
         .fontSize(11)
@@ -960,19 +949,18 @@ async function buildSeoPdf(res, summary) {
           } links:`,
           { width: contentWidth }
         );
-      doc.moveDown(0.5);
+      doc.moveDown(0.4);
 
       doc.fontSize(9).fillColor("#000000");
       section.rows.slice(0, 10).forEach((row, i) => {
         const statusText = row.status ? ` [${row.status}]` : "";
-        doc.text(
-          `${i + 1}. ${row.backlink} → ${row.target}${statusText}`
-        );
-        doc.moveDown(0.2);
+        // show the actual backlink URL, not the target
+        doc.text(`${i + 1}. ${row.backlink}${statusText}`);
+        doc.moveDown(0.15);
       });
 
       if (section.rows.length > 10) {
-        doc.moveDown(0.5);
+        doc.moveDown(0.4);
         doc
           .fontSize(10)
           .fillColor("#555555")
@@ -981,6 +969,15 @@ async function buildSeoPdf(res, summary) {
             { width: contentWidth }
           );
       }
+
+      doc.moveDown(0.6);
+      doc
+        .fontSize(10)
+        .fillColor("#444444")
+        .text(
+          "What this means: " + describeBacklinkType(section.name),
+          { width: contentWidth }
+        );
     });
   }
 
