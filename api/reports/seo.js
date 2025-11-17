@@ -519,6 +519,8 @@ async function buildSeoPdf(res, summary) {
   const contentWidth = right - left;
 
   const heroPath = path.join(process.cwd(), "public", "IMG_0903.jpeg");
+  const logoLeftPath = path.join(process.cwd(), "public", "IMG_0902.png");
+  const logoRightPath = path.join(process.cwd(), "public", "IMG_0906.png");
 
   const prevPage1 = hasPrevData ? top10Prev : null;
   const top3Count = pos1Count + pos2Count + pos3Count;
@@ -553,7 +555,7 @@ async function buildSeoPdf(res, summary) {
     hasPrevData && top10 > top10Prev ? top10 - top10Prev : 0;
 
   // ======================================================
-  // PAGE 1 – HERO + 3 BOXES + EXEC SUMMARY
+  // PAGE 1 – HERO + LOGOS + 3 BOXES + EXEC SUMMARY
   // ======================================================
 
   const heroHeight = 180;
@@ -593,6 +595,17 @@ async function buildSeoPdf(res, summary) {
     .fill("#ffffff")
     .restore();
 
+  // --- NEW: logos above the 3 cards ---
+  const logoWidth = 80;
+  const logoY = heroHeight + 8;
+
+  if (fs.existsSync(logoLeftPath)) {
+    doc.image(logoLeftPath, left, logoY, { width: logoWidth });
+  }
+  if (fs.existsSync(logoRightPath)) {
+    doc.image(logoRightPath, right - logoWidth, logoY, { width: logoWidth });
+  }
+
   const cardGap = 10;
   const cardsPerRow = 3;
   const cardWidth = (contentWidth - cardGap * (cardsPerRow - 1)) / cardsPerRow;
@@ -617,7 +630,8 @@ async function buildSeoPdf(res, summary) {
   ];
 
   let cardIndex = 0;
-  const cardTopY = heroHeight + 30;
+  // push cards slightly lower to give space under logos
+  const cardTopY = heroHeight + 60;
 
   metricCards.forEach((card) => {
     const col = cardIndex % cardsPerRow;
@@ -875,7 +889,8 @@ async function buildSeoPdf(res, summary) {
     if (doc.y > bottomLimitStart) {
       doc.addPage();
     } else {
-      doc.moveDown(1.0); // small gap under keyword table
+      // MORE GAP here so it isn't cramped under the rankings
+      doc.moveDown(2.0);
     }
 
     // Backlinks Overview heading
