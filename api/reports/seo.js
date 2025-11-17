@@ -79,16 +79,18 @@ async function parseSeoWorkbook(filePath) {
     if (a === "location") location = b ? String(b) : "";
   }
 
-  // Find header row & keyword column: any cell with "keyword"
+  // ---------- Find header row & keyword column ----------
   let headerRowNumber = null;
   let keywordCol = null;
 
+  // Pass 1: look for any header that CONTAINS "keyword"
   outer: for (let r = 1; r <= rankingSheet.rowCount; r++) {
     const row = rankingSheet.getRow(r);
     for (let c = 1; c <= row.cellCount; c++) {
       const v = row.getCell(c).value;
       const text = (v || "").toString().trim().toLowerCase();
-      if (text === "keyword") {
+      if (!text) continue;
+      if (text === "keyword" || text === "keywords" || text.includes("keyword")) {
         headerRowNumber = r;
         keywordCol = c;
         break outer;
@@ -96,10 +98,44 @@ async function parseSeoWorkbook(filePath) {
     }
   }
 
+  // Pass 2: fallback — pick the first "busy" row as header if still not found
+  if (!headerRowNumber || !keywordCol) {
+    let bestRow = null;
+    let bestCount = 0;
+
+    for (let r = 1; r <= rankingSheet.rowCount; r++) {
+      const row = rankingSheet.getRow(r);
+      let nonEmpty = 0;
+      for (let c = 1; c <= row.cellCount; c++) {
+        const v = row.getCell(c).value;
+        if (v !== null && v !== undefined && String(v).trim() !== "") {
+          nonEmpty++;
+        }
+      }
+      if (nonEmpty >= 3) {
+        bestRow = r;
+        bestCount = nonEmpty;
+        break;
+      }
+    }
+
+    if (bestRow) {
+      headerRowNumber = bestRow;
+      const row = rankingSheet.getRow(bestRow);
+      for (let c = 1; c <= row.cellCount; c++) {
+        const v = row.getCell(c).value;
+        if (v !== null && v !== undefined && String(v).trim() !== "") {
+          keywordCol = c;
+          break;
+        }
+      }
+    }
+  }
+
   if (!headerRowNumber || !keywordCol) {
     throw new Error(
-      "Could not find a header cell with text 'Keyword' in any column. " +
-        "Check the ranking sheet header row."
+      "Could not identify the header row / keyword column. " +
+        "Make sure your ranking sheet has a header row (e.g. with 'Keyword' or 'Keywords')."
     );
   }
 
@@ -166,7 +202,7 @@ async function parseSeoWorkbook(filePath) {
   if (!keywords.length) {
     throw new Error(
       "No keyword rows found under the header. " +
-        "Check that your ranking sheet has data below the 'Keyword' row."
+        "Check that your ranking sheet has data below the header row."
     );
   }
 
