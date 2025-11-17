@@ -264,10 +264,11 @@ function parseRankingSheet(workbook) {
   const top10 = withCurrent.filter((k) => k.current <= 10).length;
   const top10Prev = withPrev.filter((k) => k.previous <= 10).length;
 
-  // “page 1” + position-1 / position-2 stats
+  // “page 1” + position-1 / position-2 / position-3 stats
   const page1Count = withCurrent.filter((k) => k.current <= 10).length;
   const pos1Count = withCurrent.filter((k) => k.current === 1).length;
   const pos2Count = withCurrent.filter((k) => k.current === 2).length;
+  const pos3Count = withCurrent.filter((k) => k.current === 3).length;
 
   // medians give a more “typical” position
   const currentRanksSorted = withCurrent
@@ -335,6 +336,7 @@ function parseRankingSheet(workbook) {
     page1Count,
     pos1Count,
     pos2Count,
+    pos3Count,
     hasPrevData,
     keywords,
     topWinners,
@@ -439,12 +441,22 @@ async function parseSeoWorkbook(filePath) {
   return { ...ranking, backlinks };
 }
 
+// helper to format date objects as dd/mm/yyyy
+function formatDateNZ(info) {
+  if (!info || !info.date) return "-";
+  const d = info.date;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 // ---------- PDF generation (branded layout) ----------
 async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
   const {
     domain,
-    location,
+    // location, // currently not used on hero, to avoid "New Zealand" text
     latest,
     previous,
     tracked,
@@ -457,6 +469,7 @@ async function buildSeoPdf(res, summary) {
     page1Count,
     pos1Count,
     pos2Count,
+    pos3Count,
     hasPrevData,
     keywords,
     topWinners,
@@ -489,13 +502,7 @@ async function buildSeoPdf(res, summary) {
 
   // Paths to hero + logo in /public
   const heroPath = path.join(process.cwd(), "public", "IMG_0903.jpeg"); // hero
-  const logoPath = path.join(process.cwd(), "public", "IMG_0902.png");  // logo
-
-  const fmtPeriod = (info) => {
-    if (!info) return "-";
-    if (info.date) return info.date.toISOString().slice(0, 10);
-    return `Col ${info.col}`;
-  };
+  const logoPath = path.join(process.cwd(), "public", "IMG_0902.png"); // logo
 
   const top10Pct = tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
   const top10PrevPct =
@@ -508,12 +515,12 @@ async function buildSeoPdf(res, summary) {
   const heroHeight = 180;
 
   if (fs.existsSync(heroPath)) {
-    // hero image with dark overlay
+    // hero image with darker overlay
     doc.image(heroPath, 0, 0, { width: pageWidth, height: heroHeight });
     doc
       .save()
       .rect(0, 0, pageWidth, heroHeight)
-      .fillOpacity(0.5)
+      .fillOpacity(0.7) // darker than before
       .fill(brandDark)
       .fillOpacity(1)
       .restore();
@@ -529,16 +536,14 @@ async function buildSeoPdf(res, summary) {
   doc
     .fillColor("#ffffff")
     .fontSize(22)
-    .text("SEO Monthly Report", left, 60);
+    .text("SEO Report", left, 60);
 
   doc.fontSize(14);
   if (domain) doc.text(domain, left, 95);
-  if (location) doc.text(location, left, 115);
 
-  const periodText = `Current period: ${fmtPeriod(
-    latest
-  )}   ·   Previous: ${fmtPeriod(previous)}`;
-  doc.text(periodText, left, 135);
+  // Only show current date, dd/mm/yyyy
+  const dateText = `Report date: ${formatDateNZ(latest)}`;
+  doc.text(dateText, left, 115);
 
   // White body background
   doc
@@ -557,42 +562,47 @@ async function buildSeoPdf(res, summary) {
 
   const metricCards = [
     {
-      label: "Tracked Keywords",
+      label: "Optimised keywords",
       value: tracked.toString(),
       color: brandBlue
     },
     {
-      label: "Page 1 Keywords (1–10)",
+      label: "Number of keywords on page 1",
       value: `${page1Count}/${tracked}`,
       color: brandGreen
     },
     {
-      label: "Top 10 Visibility",
+      label: "Top 10 visibility",
       value: `${top10Pct}%`,
       color: brandRed
     },
     {
-      label: "Pos #1",
+      label: "Keywords in top position",
       value: pos1Count.toString(),
       color: brandBlue
     },
     {
-      label: "Pos #2",
+      label: "Keywords in 2nd position",
       value: pos2Count.toString(),
       color: brandGreen
     },
     {
-      label: "Median Position",
-      value: medianCurrent.toFixed(1),
+      label: "Keywords in 3rd position",
+      value: pos3Count.toString(),
       color: brandRed
+    },
+    {
+      label: "Median position",
+      value: medianCurrent.toFixed(1),
+      color: brandBlue
     }
   ];
 
   if (backlinks && backlinks.totalBacklinks) {
     metricCards.push({
-      label: "Backlinks in Workbook",
+      label: "Backlinks in workbook",
       value: backlinks.totalBacklinks.toString(),
-      color: brandBlue
+      color: brandGreen
     });
   }
 
@@ -693,7 +703,7 @@ async function buildSeoPdf(res, summary) {
     `${page1Count} of your ${tracked} keywords are currently on page 1 (positions 1–10).`
   );
   introLines.push(
-    `${pos1Count} keywords are sitting in position 1 and ${pos2Count} are in position 2.`
+    `${pos1Count} keywords are sitting in position 1, ${pos2Count} in position 2, and ${pos3Count} in position 3.`
   );
 
   if (hasPrevData) {
@@ -806,9 +816,9 @@ async function buildSeoPdf(res, summary) {
 
     if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
       doc.addPage();
-      doc.fontSize(9).text(
-        "Keyword                           Prev  Curr  Change"
-      );
+      doc
+        .fontSize(9)
+        .text("Keyword                           Prev  Curr  Change");
       doc.text(
         "-------------------------------------------------------------"
       );
