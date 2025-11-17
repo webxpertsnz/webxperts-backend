@@ -1,15 +1,14 @@
-This is the last script you have me ? // api/reports/seo.js
+// api/reports/seo.js
 //
-// Reads an uploaded SEO Excel file and generates a PDF summary.
-// Uses dynamic imports for exceljs/formidable so the function
-// doesn't crash at load time.
+// Node/Vercel serverless function:
+// - Accepts multipart/form-data with field "seo_file"
+// - Reads Excel file with exceljs
+// - Generates PDF with pdfkit
 
-import PDFDocument from "pdfkit";
-
-// ---- dynamic imports ----
+// ---------- Dynamic imports so top-level never crashes ----------
 async function getFormidable() {
   const mod = await import("formidable");
-  return mod.default || mod; // handle both ESM/CJS
+  return mod.default || mod;
 }
 
 async function getExcelJS() {
@@ -17,7 +16,12 @@ async function getExcelJS() {
   return mod.default || mod;
 }
 
-// ---- helpers ----
+async function getPdfKit() {
+  const mod = await import("pdfkit");
+  return mod.default || mod;
+}
+
+// ---------- Helpers ----------
 async function parseForm(req) {
   const formidable = await getFormidable();
   return new Promise((resolve, reject) => {
@@ -32,18 +36,24 @@ async function parseForm(req) {
 function parseHeaderDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
+
   if (typeof value === "number") {
     // Excel serial date
     const excelEpoch = new Date(Date.UTC(1899, 11, 30));
     const dt = new Date(excelEpoch.getTime() + value * 86400000);
     return isNaN(dt) ? null : dt;
   }
-  const text = typeof value === "string" ? value : value.text || "";
+
+  const text =
+    typeof value === "string"
+      ? value
+      : (value && value.text) ? value.text : "";
+
   const dt = new Date(text);
   return isNaN(dt) ? null : dt;
 }
 
-// ---- Excel parsing ----
+// ---------- Excel parsing ----------
 async function parseSeoWorkbook(filePath) {
   const ExcelJS = await getExcelJS();
   const workbook = new ExcelJS.Workbook();
@@ -60,7 +70,10 @@ async function parseSeoWorkbook(filePath) {
   let domain = "";
   let location = "";
   for (let r = 1; r <= Math.min(10, rankingSheet.rowCount); r++) {
-    const a = (rankingSheet.getCell(r, 1).value || "").toString().trim().toLowerCase();
+    const a = (rankingSheet.getCell(r, 1).value || "")
+      .toString()
+      .trim()
+      .toLowerCase();
     const b = rankingSheet.getCell(r, 2).value;
     if (a === "domain" || a === "website") domain = b ? String(b) : "";
     if (a === "location") location = b ? String(b) : "";
@@ -207,8 +220,9 @@ async function parseSeoWorkbook(filePath) {
   };
 }
 
-// ---- PDF generation ----
-function buildSeoPdf(res, summary) {
+// ---------- PDF generation ----------
+async function buildSeoPdf(res, summary) {
+  const PDFKit = await getPdfKit();
   const {
     domain,
     location,
@@ -224,8 +238,9 @@ function buildSeoPdf(res, summary) {
     topLosers
   } = summary;
 
-  const doc = new PDFDocument({ margin: 40 });
+  const doc = new PDFKit({ margin: 40 });
 
+  res.statusCode = 200;
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
@@ -256,9 +271,7 @@ function buildSeoPdf(res, summary) {
   doc.text(
     `Average position: ${avgCurrent.toFixed(1)} (prev ${avgPrev.toFixed(1)})`
   );
-  doc.text(
-    `Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)`
-  );
+  doc.text(`Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)`);
   doc.moveDown();
 
   doc.fontSize(11).fillColor("#555");
@@ -326,52 +339,57 @@ function buildSeoPdf(res, summary) {
       else changeStr = "  0";
     }
     const kw =
-      k.keyword.length > 30
-        ? k.keyword.slice(0, 27) + "..."
-        : k.keyword;
+      k.keyword.length > 30 ? k.keyword.slice(0, 27) + "..." : k.keyword;
     doc.text(`${kw.padEnd(30)} ${prevStr}  ${currStr}  ${changeStr}`);
   });
 
   doc.end();
 }
 
-// ---- main handler ----
+// ---------- Main handler ----------
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       // health check
-      return res
-        .status(200)
-        .json({ ok: true, message: "SEO reports API is alive" });
+      res.statusCode = 200;
+      return res.json({
+        ok: true,
+        message: "SEO reports API is alive"
+      });
     }
 
     if (req.method !== "POST") {
       res.setHeader("Allow", ["GET", "POST"]);
-      return res.status(405).json({ error: "Method not allowed" });
+      res.statusCode = 405;
+      return res.json({ error: "Method not allowed" });
     }
 
     const { files } = await parseForm(req);
     const file = files.seo_file;
+
     if (!file) {
-      return res.status(400).json({ error: "Missing seo_file upload" });
+      res.statusCode = 400;
+      return res.json({ error: "Missing seo_file upload" });
     }
 
     const filePath = Array.isArray(file) ? file[0].filepath : file.filepath;
     if (!filePath) {
-      return res
-        .status(400)
-        .json({ error: "Could not access uploaded file path" });
+      res.statusCode = 400;
+      return res.json({ error: "Could not access uploaded file path" });
     }
 
     const summary = await parseSeoWorkbook(filePath);
-    buildSeoPdf(res, summary);
+
+    // Stream PDF out
+    await buildSeoPdf(res, summary);
   } catch (err) {
     console.error("SEO report error:", err);
     if (!res.headersSent) {
       const msg = err && err.message ? err.message : String(err);
-      return res
-        .status(500)
-        .json({ error: "Failed to generate SEO report: " + msg });
+      res.statusCode = 500;
+      return res.json({
+        error: "Failed to generate SEO report: " + msg
+      });
     }
   }
 }
