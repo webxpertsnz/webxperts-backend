@@ -7,7 +7,7 @@
 // - Extracts ranking data from the "Ranking" sheet
 //   using the two right-most date columns
 // - Extracts backlinks from the backlink sheets
-// - Generates a human-readable PDF with pdfkit
+// - Generates a branded, human-readable PDF with pdfkit
 
 // ---------- Dynamic imports ----------
 async function getFormidable() {
@@ -339,7 +339,7 @@ function parseRankingSheet(workbook) {
   };
 }
 
-// ---------- Backlink extraction (same as before) ----------
+// ---------- Backlink extraction ----------
 function parseBacklinkSheet(sheet, sheetName) {
   let headerRowNumber = null;
   let backlinkCol = null;
@@ -436,7 +436,7 @@ async function parseSeoWorkbook(filePath) {
   return { ...ranking, backlinks };
 }
 
-// ---------- PDF generation ----------
+// ---------- PDF generation (branded layout) ----------
 async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
   const {
@@ -461,8 +461,9 @@ async function buildSeoPdf(res, summary) {
     backlinks
   } = summary;
 
-  const doc = new PDFKit({ margin: 40 });
+  const doc = new PDFKit({ size: "A4", margin: 40 });
 
+  // --- HTTP headers ---
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
@@ -472,119 +473,293 @@ async function buildSeoPdf(res, summary) {
 
   doc.pipe(res);
 
+  // --- Brand colours ---
+  const brandDark = "#222222";
+  const brandBlue = "#1976d2";
+  const brandRed = "#e53935";
+  const brandGreen = "#43a047";
+
+  const pageWidth = doc.page.width;
+  const left = doc.page.margins.left;
+  const right = pageWidth - doc.page.margins.right;
+  const contentWidth = right - left;
+
   const fmtPeriod = (info) => {
     if (!info) return "-";
     if (info.date) return info.date.toISOString().slice(0, 10);
-    return `Column ${info.col}`;
+    return `Col ${info.col}`;
   };
 
   const top10Pct = tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
   const top10PrevPct =
     tracked > 0 ? Math.round((top10Prev / tracked) * 100) : 0;
 
-  // ---- Cover page ----
-  doc.fontSize(22).text("SEO Performance Report", { align: "center" });
-  doc.moveDown(1.5);
+  // ======================================================
+  // PAGE 1 – HERO + HIGH LEVEL SUMMARY
+  // ======================================================
 
-  doc.fontSize(12);
-  if (domain) doc.text(`Domain: ${domain}`);
-  if (location) doc.text(`Location: ${location}`);
-  doc.text(`Current period column: ${fmtPeriod(latest)}`);
-  if (previous) doc.text(`Compared with column: ${fmtPeriod(previous)}`);
+  // Hero band
+  const heroHeight = 180;
+  doc
+    .save()
+    .rect(0, 0, pageWidth, heroHeight)
+    .fill(brandDark)
+    .restore();
+
+  doc
+    .fillColor("#ffffff")
+    .fontSize(22)
+    .text("SEO Monthly Report", left, 60);
+
+  doc.fontSize(14);
+  if (domain) doc.text(domain, left, 95);
+  if (location) doc.text(location, left, 115);
+
+  const periodText = `Current period: ${fmtPeriod(
+    latest
+  )}   ·   Previous: ${fmtPeriod(previous)}`;
+  doc.text(periodText, left, 135);
+
+  // White body background
+  doc
+    .save()
+    .rect(0, heroHeight, pageWidth, doc.page.height - heroHeight)
+    .fill("#ffffff")
+    .restore();
+
+  doc.y = heroHeight + 30;
+
+  // Metric cards (3 per row)
+  const cardGap = 10;
+  const cardsPerRow = 3;
+  const cardWidth = (contentWidth - cardGap * (cardsPerRow - 1)) / cardsPerRow;
+  const cardHeight = 60;
+
+  const metricCards = [
+    {
+      label: "Tracked Keywords",
+      value: tracked.toString(),
+      color: brandBlue
+    },
+    {
+      label: "Page 1 Keywords (1–10)",
+      value: `${page1Count}/${tracked}`,
+      color: brandGreen
+    },
+    {
+      label: "Top 10 Visibility",
+      value: `${top10Pct}%`,
+      color: brandRed
+    },
+    {
+      label: "Pos #1",
+      value: pos1Count.toString(),
+      color: brandBlue
+    },
+    {
+      label: "Pos #2",
+      value: pos2Count.toString(),
+      color: brandGreen
+    },
+    {
+      label: "Median Position",
+      value: medianCurrent.toFixed(1),
+      color: brandRed
+    }
+  ];
+
+  if (backlinks && backlinks.totalBacklinks) {
+    metricCards.push({
+      label: "Backlinks in Workbook",
+      value: backlinks.totalBacklinks.toString(),
+      color: brandBlue
+    });
+  }
+
+  let cardIndex = 0;
+  metricCards.forEach((card) => {
+    const row = Math.floor(cardIndex / cardsPerRow);
+    const col = cardIndex % cardsPerRow;
+    const x = left + col * (cardWidth + cardGap);
+    const y = heroHeight + 30 + row * (cardHeight + cardGap);
+
+    // coloured box
+    doc
+      .save()
+      .rect(x, y, cardWidth, cardHeight)
+      .fill(card.color)
+      .restore();
+
+    // text inside
+    doc
+      .fillColor("#ffffff")
+      .fontSize(11)
+      .text(card.label, x + 8, y + 8, {
+        width: cardWidth - 16
+      });
+
+    doc
+      .fontSize(20)
+      .font("Helvetica-Bold")
+      .text(card.value, x + 8, y + 26, {
+        width: cardWidth - 16,
+        align: "left"
+      })
+      .font("Helvetica");
+
+    cardIndex++;
+  });
+
+  // footer line on page 1
+  doc
+    .moveTo(left, doc.page.height - 50)
+    .lineTo(right, doc.page.height - 50)
+    .strokeColor("#dddddd")
+    .lineWidth(1)
+    .stroke();
+
+  doc
+    .fontSize(9)
+    .fillColor("#777777")
+    .text(
+      "WebXperts SEO Report – generated automatically from your weekly ranking workbook.",
+      left,
+      doc.page.height - 45,
+      { width: contentWidth }
+    );
+
+  // ======================================================
+  // PAGE 2 – NARRATIVE OVERVIEW
+  // ======================================================
+  doc.addPage();
+
+  doc
+    .fontSize(16)
+    .fillColor("#000000")
+    .text("Overview", left, doc.y, { underline: true });
+
   doc.moveDown();
 
-  doc.text(`Tracked keywords: ${tracked}`);
-  doc.text(
-    `Average position (current): ${avgCurrent.toFixed(
-      1
-    )}  |  Median: ${medianCurrent.toFixed(1)}`
+  const introLines = [];
+
+  introLines.push(
+    `We are currently tracking ${tracked} keywords for your website${
+      domain ? " " + domain : ""
+    }.`
   );
+
   if (hasPrevData) {
-    doc.text(
-      `Average position (previous): ${avgPrev.toFixed(
+    introLines.push(
+      `Average ranking moved from ${avgPrev.toFixed(
         1
-      )}  |  Median: ${medianPrev.toFixed(1)}`
+      )} to ${avgCurrent.toFixed(1)}, with a typical (median) position of ${medianCurrent.toFixed(
+        1
+      )}.`
+    );
+  } else {
+    introLines.push(
+      `Average ranking this period is ${avgCurrent.toFixed(
+        1
+      )}, with a typical (median) position of ${medianCurrent.toFixed(1)}.`
     );
   }
 
-  // Page 1 / positions 1 & 2 summary (what you asked for)
-  doc.moveDown(0.5);
-  doc.text(
-    `Page 1 coverage: ${page1Count} of ${tracked} keywords are on page 1 (positions 1–10).`
+  introLines.push(
+    `${page1Count} of your ${tracked} keywords are currently on page 1 (positions 1–10).`
   );
-  doc.text(
-    `Positions 1 & 2: ${pos1Count} keywords in position 1, ${pos2Count} in position 2.`
+  introLines.push(
+    `${pos1Count} keywords are sitting in position 1 and ${pos2Count} are in position 2.`
   );
 
   if (hasPrevData) {
-    doc.text(
-      `Top 10 visibility: ${top10Pct}% (previously ${top10PrevPct}%).`
+    introLines.push(
+      `Top 10 visibility is now ${top10Pct}% (previously ${top10PrevPct}%).`
     );
-  } else {
-    doc.text(`Top 10 visibility (current): ${top10Pct}%.`);
   }
 
   if (backlinks && backlinks.totalBacklinks) {
-    doc.moveDown(0.5);
-    doc.text(
-      `Total backlinks recorded in workbook: ${backlinks.totalBacklinks}`
+    introLines.push(
+      `This workbook also records ${backlinks.totalBacklinks} backlinks created across your various campaigns.`
     );
   }
 
-  doc.moveDown(1);
-  doc.fontSize(10).fillColor("#555");
-  doc.text(
-    "This report is based on the last two date columns in your Ranking sheet, with keywords taken from column A."
-  );
+  doc
+    .fontSize(11)
+    .fillColor("#333333")
+    .text(introLines.join(" "), {
+      width: contentWidth,
+      align: "left"
+    });
 
-  // ---- Winners / losers page ----
+  // ======================================================
+  // PAGE 3 – RANKING MOVEMENT
+  // ======================================================
   if (topWinners.length || topLosers.length) {
     doc.addPage();
-    doc.fontSize(16).fillColor("#000").text("Ranking Movement", {
-      underline: true
-    });
+
+    doc
+      .fontSize(16)
+      .fillColor("#000000")
+      .text("Ranking Movement", left, doc.y, { underline: true });
     doc.moveDown();
 
-    doc.fontSize(13).text("Top Winners");
-    doc.moveDown(0.5);
-    doc.fontSize(10);
+    // Winners
+    doc
+      .fontSize(13)
+      .fillColor(brandGreen)
+      .text("Top Gainers", left, doc.y);
+    doc.moveDown(0.3);
+
+    doc.fontSize(10).fillColor("#000000");
     if (!topWinners.length) {
       doc.text("No improving keywords this period.");
     } else {
       topWinners.forEach((k) => {
         doc.text(
-          `• ${k.keyword}: ${k.previous ?? "-"} → ${k.current ?? "-"} (up ${
-            k.change
-          } places)`
+          `• ${k.keyword}: ${k.previous ?? "-"} → ${
+            k.current ?? "-"
+          } (up ${k.change} places)`
         );
       });
     }
 
     doc.moveDown();
-    doc.fontSize(13).text("Top Losers");
-    doc.moveDown(0.5);
-    doc.fontSize(10);
+
+    // Losers
+    doc
+      .fontSize(13)
+      .fillColor(brandRed)
+      .text("Top Decliners", left, doc.y);
+    doc.moveDown(0.3);
+
+    doc.fontSize(10).fillColor("#000000");
     if (!topLosers.length) {
       doc.text("No dropping keywords this period.");
     } else {
       topLosers.forEach((k) => {
         doc.text(
-          `• ${k.keyword}: ${k.previous ?? "-"} → ${k.current ?? "-"} (down ${
-            Math.abs(k.change)
-          } places)`
+          `• ${k.keyword}: ${k.previous ?? "-"} → ${
+            k.current ?? "-"
+          } (down ${Math.abs(k.change)} places)`
         );
       });
     }
   }
 
-  // ---- Keyword detail ----
+  // ======================================================
+  // PAGE 4+ – KEYWORD TABLE
+  // ======================================================
   doc.addPage();
-  doc.fontSize(16).fillColor("#000").text("Keyword Detail", {
-    underline: true
-  });
+  doc
+    .fontSize(16)
+    .fillColor("#000000")
+    .text("Keyword Detail", left, doc.y, { underline: true });
+
   doc.moveDown(0.7);
 
-  doc.fontSize(9).text("Keyword                           Prev  Curr  Change");
+  doc.fontSize(9);
+  doc.fillColor("#000000");
+  doc.text("Keyword                           Prev  Curr  Change");
   doc.text("-------------------------------------------------------------");
 
   keywords.forEach((k) => {
@@ -615,42 +790,59 @@ async function buildSeoPdf(res, summary) {
     }
   });
 
-  // ---- Backlinks overview ----
+  // ======================================================
+  // BACKLINKS PAGES
+  // ======================================================
   if (backlinks && backlinks.sections && backlinks.sections.length) {
+    // Overview
     doc.addPage();
-    doc.fontSize(16).fillColor("#000").text("Backlinks Overview", {
-      underline: true
-    });
+    doc
+      .fontSize(16)
+      .fillColor("#000000")
+      .text("Backlinks Overview", left, doc.y, { underline: true });
     doc.moveDown();
 
-    doc.fontSize(12).text(
-      `Total backlinks in this workbook: ${backlinks.totalBacklinks}`
-    );
+    doc
+      .fontSize(12)
+      .fillColor("#333333")
+      .text(
+        `Total backlinks in this workbook: ${backlinks.totalBacklinks}`,
+        { width: contentWidth }
+      );
     doc.moveDown(0.5);
 
     backlinks.sections.forEach((section, idx) => {
       if (idx > 0) doc.moveDown(0.5);
-      doc.fontSize(12).text(section.name);
-      doc.fontSize(10).text(
-        `Links in this category: ${section.total}`,
-        { indent: 10 }
-      );
+      doc.fontSize(12).fillColor("#000000").text(section.name);
+      doc
+        .fontSize(10)
+        .fillColor("#555555")
+        .text(`Links in this category: ${section.total}`, {
+          indent: 10
+        });
     });
 
+    // One page per backlink category
     backlinks.sections.forEach((section) => {
       doc.addPage();
-      doc.fontSize(16).fillColor("#000").text(section.name, {
-        underline: true
-      });
+      doc
+        .fontSize(16)
+        .fillColor("#000000")
+        .text(section.name, left, doc.y, { underline: true });
       doc.moveDown(0.5);
-      doc.fontSize(11).text(
-        `Total links: ${section.total}. Showing first ${
-          section.rows.length > 10 ? 10 : section.rows.length
-        } links:`
-      );
-      doc.moveDown(0.5);
-      doc.fontSize(9);
 
+      doc
+        .fontSize(11)
+        .fillColor("#333333")
+        .text(
+          `Total links: ${section.total}. Showing first ${
+            section.rows.length > 10 ? 10 : section.rows.length
+          } links:`,
+          { width: contentWidth }
+        );
+      doc.moveDown(0.5);
+
+      doc.fontSize(9).fillColor("#000000");
       section.rows.slice(0, 10).forEach((row, i) => {
         const statusText = row.status ? ` [${row.status}]` : "";
         doc.text(
@@ -661,9 +853,13 @@ async function buildSeoPdf(res, summary) {
 
       if (section.rows.length > 10) {
         doc.moveDown(0.5);
-        doc.fontSize(10).text(
-          `... plus ${section.rows.length - 10} more links in this category.`
-        );
+        doc
+          .fontSize(10)
+          .fillColor("#555555")
+          .text(
+            `... plus ${section.rows.length - 10} more links in this category.`,
+            { width: contentWidth }
+          );
       }
     });
   }
