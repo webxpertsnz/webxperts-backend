@@ -1,10 +1,12 @@
 // api/reports/seo.js
 //
 // Vercel/Next.js API route:
+//
 // - Accepts multipart/form-data with field "seo_file"
-// - Reads an SEO ranking Excel file with exceljs
-// - Auto-detects keyword + rank columns
-// - Generates a PDF summary with pdfkit
+// - Reads the SEO Excel workbook with exceljs
+// - Extracts ranking data from the "Ranking" sheet
+// - Extracts backlinks from the backlink sheets
+// - Generates a human-readable PDF with pdfkit
 
 // ---------- Dynamic imports ----------
 async function getFormidable() {
@@ -34,7 +36,35 @@ async function parseForm(req) {
   });
 }
 
-// flexible date-ish parser (but we no longer *require* dates)
+function cellToString(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    if (v.text) return String(v.text);
+    if (v.result) return String(v.result);
+    if (Array.isArray(v.richText)) {
+      return v.richText.map((p) => p.text || "").join("");
+    }
+  }
+  return String(v);
+}
+
+// “Is this a *position* or rank?”  (1–100 etc, not a timestamp)
+function normaliseRank(value) {
+  if (value === null || value === undefined) return null;
+
+  let n = null;
+  if (typeof value === "number") {
+    n = value;
+  } else if (!isNaN(Number(value))) {
+    n = Number(value);
+  }
+
+  // treat zeros / negatives / huge numbers as “not a rank”
+  if (n === null || n <= 0 || n > 1000) return null;
+  return n;
+}
+
+// Try to interpret header value as a date (for nicer labels)
 function parseHeaderDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
@@ -59,8 +89,8 @@ function parseHeaderDate(value) {
   if (!text) return null;
 
   const looksLikeDate =
-    /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/.test(text) || // 2024-11-01, 01/11/2024
-    /^\d{8}$/.test(text) || // 20241101
+    /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/.test(text) ||
+    /^\d{8}$/.test(text) ||
     (/\d/.test(text) && (text.includes("/") || text.includes("-")));
 
   if (!looksLikeDate) return null;
@@ -69,24 +99,8 @@ function parseHeaderDate(value) {
   return isNaN(dt) ? null : dt;
 }
 
-function cellToString(v) {
-  if (!v && v !== 0) return "";
-  if (typeof v === "object" && v !== null) {
-    if (v.text) return String(v.text);
-    if (v.result) return String(v.result);
-    if (Array.isArray(v.richText)) {
-      return v.richText.map((p) => p.text || "").join("");
-    }
-  }
-  return String(v);
-}
-
-// ---------- Excel parsing ----------
-async function parseSeoWorkbook(filePath) {
-  const ExcelJS = await getExcelJS();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
-
+// ---------- Ranking extraction ----------
+function parseRankingSheet(workbook) {
   // Prefer a sheet called "Ranking", otherwise first sheet
   let sheet = workbook.getWorksheet("Ranking");
   if (!sheet) sheet = workbook.worksheets[0];
@@ -96,13 +110,13 @@ async function parseSeoWorkbook(filePath) {
   let domain = "";
   let location = "";
   for (let r = 1; r <= Math.min(10, sheet.rowCount); r++) {
-    const a = cellToString(sheet.getCell(r, 1)).trim().toLowerCase();
+    const a = cellToString(sheet.getCell(r, 1).value).trim().toLowerCase();
     const b = sheet.getCell(r, 2).value;
     if (a === "domain" || a === "website") domain = b ? String(b) : "";
     if (a === "location") location = b ? String(b) : "";
   }
 
-  // ---------- find header row & keyword column ----------
+  // --- Find header row & keyword column ---
   let headerRowNumber = null;
   let keywordCol = null;
 
@@ -114,7 +128,7 @@ async function parseSeoWorkbook(filePath) {
         .trim()
         .toLowerCase();
       if (!text) continue;
-      if (text === "keyword" || text === "keywords" || text.includes("keyword")) {
+      if (text.includes("keyword")) {
         headerRowNumber = r;
         keywordCol = c;
         break outer;
@@ -122,7 +136,7 @@ async function parseSeoWorkbook(filePath) {
     }
   }
 
-  // Pass 2: fallback — first "busy row" with 3+ non-empty cells
+  // Pass 2: fallback — first “busy” row with 3+ non-empty cells
   if (!headerRowNumber || !keywordCol) {
     for (let r = 1; r <= sheet.rowCount; r++) {
       const row = sheet.getRow(r);
@@ -146,21 +160,21 @@ async function parseSeoWorkbook(filePath) {
   if (!headerRowNumber || !keywordCol) {
     throw new Error(
       "Could not identify the header row / keyword column. " +
-        "Make sure your ranking sheet has a header row with a 'Keyword' column."
+        "Make sure your ranking sheet has a header row with a Keyword column."
     );
   }
 
   const headerRow = sheet.getRow(headerRowNumber);
-
-  // ---------- detect URL column ----------
-  let urlCol = null;
   const columnCount = sheet.columnCount || headerRow.cellCount;
+
+  // --- URL column ---
+  let urlCol = null;
   for (let c = 1; c <= columnCount; c++) {
     const label = cellToString(headerRow.getCell(c).value)
       .trim()
       .toLowerCase();
     if (
-      ["url", "landing page", "page", "target url", "address"].includes(
+      ["url", "landing page", "page", "target url", "terget url", "address"].includes(
         label
       )
     ) {
@@ -169,93 +183,58 @@ async function parseSeoWorkbook(filePath) {
     }
   }
 
-  // ---------- detect ranking columns (latest / previous) ----------
-  const dateCandidates = [];
-  const genericRankCandidates = [];
+  // --- Detect ranking columns (latest & previous) ---
+  const headerCandidates = [];
 
-  for (let c = 1; c <= columnCount; c++) {
+  for (let c = keywordCol + 1; c <= columnCount; c++) {
     const raw = headerRow.getCell(c).value;
     const label = cellToString(raw).trim();
-    const labelLower = label.toLowerCase();
-
     if (!label) continue;
 
-    const dt = parseHeaderDate(raw);
-    if (dt) {
-      // date-based candidate
-      dateCandidates.push({ col: c, label, date: dt });
-      continue;
-    }
+    const lower = label.toLowerCase();
+    const date = parseHeaderDate(raw);
 
-    // label-based candidates (no dates)
-    const isRanky =
-      labelLower.includes("rank") ||
-      labelLower.includes("position") ||
-      labelLower.includes("pos") ||
-      labelLower.includes("google") ||
-      labelLower.includes("bing") ||
-      labelLower.includes("yahoo") ||
-      labelLower.includes("current") ||
-      labelLower.includes("previous") ||
-      labelLower.includes("last") ||
-      labelLower.includes("week") ||
-      labelLower.includes("month");
+    const score =
+      (lower.includes("current") ? 4 : 0) +
+      (lower.includes("prev") || lower.includes("last") ? 3 : 0) +
+      (lower.includes("rank") || lower.includes("position") ? 2 : 0) +
+      (date ? 1 : 0);
 
-    if (isRanky && c > keywordCol) {
-      genericRankCandidates.push({ col: c, label, date: null });
-    }
+    headerCandidates.push({
+      col: c,
+      label,
+      lower,
+      date,
+      score
+    });
   }
+
+  // Sort by “how likely this is to be the latest column”
+  headerCandidates.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    if (a.date && b.date) return a.date - b.date;
+    return a.col - b.col;
+  });
 
   let latest = null;
   let previous = null;
 
-  if (dateCandidates.length) {
-    // Use real dates if present
-    dateCandidates.sort((a, b) => a.date - b.date);
-    latest = dateCandidates[dateCandidates.length - 1];
-    if (dateCandidates.length >= 2) {
-      previous = dateCandidates[dateCandidates.length - 2];
+  if (headerCandidates.length) {
+    latest = headerCandidates[headerCandidates.length - 1];
+    if (headerCandidates.length >= 2) {
+      previous = headerCandidates[headerCandidates.length - 2];
     }
-  } else if (genericRankCandidates.length) {
-    // Use label-based rank columns
-    // Try to pick 'current' as latest, 'previous/last' as previous
-    const cur = genericRankCandidates.find((c) =>
-      c.label.toLowerCase().includes("current")
-    );
-    const prev = genericRankCandidates.find((c) => {
-      const l = c.label.toLowerCase();
-      return l.includes("prev") || l.includes("last");
-    });
-
-    latest = cur || genericRankCandidates[genericRankCandidates.length - 1];
-    if (prev && prev.col !== latest.col) {
-      previous = prev;
-    } else if (genericRankCandidates.length >= 2) {
-      // the column just before latest
-      const idx = genericRankCandidates.findIndex(
-        (c) => c.col === latest.col
-      );
-      if (idx > 0) previous = genericRankCandidates[idx - 1];
-    }
-  }
-
-  // Fallback: scan numeric columns to the right of Keyword
-  if (!latest) {
+  } else {
+    // Fallback: look at numeric cells below the header and use rightmost two
     const numericCols = new Set();
     const maxSampleRows = Math.min(sheet.rowCount, headerRowNumber + 50);
-
     for (let r = headerRowNumber + 1; r <= maxSampleRows; r++) {
       const row = sheet.getRow(r);
       for (let c = keywordCol + 1; c <= columnCount; c++) {
-        const val = row.getCell(c).value;
-        if (typeof val === "number") {
-          numericCols.add(c);
-        } else if (val && !isNaN(Number(val))) {
-          numericCols.add(c);
-        }
+        const rank = normaliseRank(row.getCell(c).value);
+        if (rank !== null) numericCols.add(c);
       }
     }
-
     const cols = Array.from(numericCols).sort((a, b) => a - b);
     if (cols.length) {
       const lastCol = cols[cols.length - 1];
@@ -263,14 +242,17 @@ async function parseSeoWorkbook(filePath) {
 
       latest = {
         col: lastCol,
-        label: cellToString(headerRow.getCell(lastCol).value).trim() || `Col ${lastCol}`,
+        label:
+          cellToString(headerRow.getCell(lastCol).value).trim() ||
+          `Column ${lastCol}`,
         date: null
       };
-
       if (prevCol) {
         previous = {
           col: prevCol,
-          label: cellToString(headerRow.getCell(prevCol).value).trim() || `Col ${prevCol}`,
+          label:
+            cellToString(headerRow.getCell(prevCol).value).trim() ||
+            `Column ${prevCol}`,
           date: null
         };
       }
@@ -284,38 +266,39 @@ async function parseSeoWorkbook(filePath) {
     );
   }
 
-  // ---------- collect keyword rows ----------
+  // --- Collect keyword rows ---
   const keywords = [];
+
   for (let r = headerRowNumber + 1; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
     const kwVal = row.getCell(keywordCol).value;
     if (!kwVal) continue;
+
     const kw = cellToString(kwVal).trim();
     if (!kw) continue;
 
     const urlVal = urlCol ? row.getCell(urlCol).value : "";
-    const url = urlVal ? cellToString(urlVal) : "";
+    const url = urlVal ? cellToString(urlVal).trim() : "";
 
-    const curRaw = row.getCell(latest.col).value;
-    const prevRaw = previous ? row.getCell(previous.col).value : null;
+    const curRank = normaliseRank(row.getCell(latest.col).value);
+    const prevRank = previous
+      ? normaliseRank(row.getCell(previous.col).value)
+      : null;
 
-    const cur =
-      typeof curRaw === "number" ? curRaw : curRaw ? Number(curRaw) : null;
-    const prev =
-      typeof prevRaw === "number" ? prevRaw : prevRaw ? Number(prevRaw) : null;
+    // Skip rows with no usable rank data at all
+    if (curRank === null && prevRank === null) continue;
 
     keywords.push({
       keyword: kw,
       url,
-      current: cur && cur > 0 ? cur : null,
-      previous: prev && prev > 0 ? prev : null
+      current: curRank,
+      previous: prevRank
     });
   }
 
   if (!keywords.length) {
     throw new Error(
-      "No keyword rows found under the header. " +
-        "Check that your ranking sheet has data rows below the header."
+      "No usable keyword rows found. Check that your ranking sheet has keyword rows with numeric positions."
     );
   }
 
@@ -373,6 +356,104 @@ async function parseSeoWorkbook(filePath) {
   };
 }
 
+// ---------- Backlink extraction ----------
+function parseBacklinkSheet(sheet, sheetName) {
+  // Find header row (search first 10 rows for "Backlinks")
+  let headerRowNumber = null;
+  let backlinkCol = null;
+  let targetCol = null;
+  let statusCol = null;
+
+  for (let r = 1; r <= Math.min(10, sheet.rowCount); r++) {
+    const row = sheet.getRow(r);
+    for (let c = 1; c <= row.cellCount; c++) {
+      const label = cellToString(row.getCell(c).value)
+        .trim()
+        .toLowerCase();
+      if (!label) continue;
+
+      if (!backlinkCol && label.includes("backlink")) {
+        backlinkCol = c;
+        headerRowNumber = r;
+      }
+      if (
+        !targetCol &&
+        (label.includes("target") || label.includes("terget"))
+      ) {
+        targetCol = c;
+        headerRowNumber = headerRowNumber || r;
+      }
+      if (!statusCol && label.includes("status")) {
+        statusCol = c;
+        headerRowNumber = headerRowNumber || r;
+      }
+    }
+    if (backlinkCol && targetCol && headerRowNumber) break;
+  }
+
+  if (!headerRowNumber || !backlinkCol || !targetCol) {
+    return { name: sheetName, total: 0, rows: [] };
+  }
+
+  const rows = [];
+  for (let r = headerRowNumber + 1; r <= sheet.rowCount; r++) {
+    const row = sheet.getRow(r);
+    const backlink = cellToString(row.getCell(backlinkCol).value).trim();
+    const target = cellToString(row.getCell(targetCol).value).trim();
+    const status = statusCol
+      ? cellToString(row.getCell(statusCol).value).trim()
+      : "";
+
+    if (!backlink && !target) continue;
+
+    rows.push({ backlink, target, status });
+  }
+
+  return {
+    name: sheetName,
+    total: rows.length,
+    rows
+  };
+}
+
+function parseBacklinks(workbook) {
+  const sheetNames = [
+    "All Backlinks",
+    "Profile Backlinks",
+    "Web 2.0 Backlinks",
+    "Syndication Backlinks",
+    "Article Submission",
+    "Social Bookmarking Backlinks"
+  ];
+
+  const sections = [];
+  for (const name of sheetNames) {
+    const sheet = workbook.getWorksheet(name);
+    if (!sheet) continue;
+    const parsed = parseBacklinkSheet(sheet, name);
+    if (parsed.total > 0) sections.push(parsed);
+  }
+
+  const totalBacklinks = sections.reduce((sum, s) => sum + s.total, 0);
+
+  return {
+    totalBacklinks,
+    sections
+  };
+}
+
+// ---------- Read whole workbook ----------
+async function parseSeoWorkbook(filePath) {
+  const ExcelJS = await getExcelJS();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+
+  const ranking = parseRankingSheet(workbook);
+  const backlinks = parseBacklinks(workbook);
+
+  return { ...ranking, backlinks };
+}
+
 // ---------- PDF generation ----------
 async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
@@ -389,7 +470,8 @@ async function buildSeoPdf(res, summary) {
     hasPrevData,
     keywords,
     topWinners,
-    topLosers
+    topLosers,
+    backlinks
   } = summary;
 
   const doc = new PDFKit({ margin: 40 });
@@ -414,54 +496,50 @@ async function buildSeoPdf(res, summary) {
   const top10PrevPct =
     tracked > 0 ? Math.round((top10Prev / tracked) * 100) : 0;
 
-  // Cover
-  doc.fontSize(18).text("SEO Ranking Report");
-  doc.moveDown(0.5);
-  doc.fontSize(11).fillColor("#555");
+  // ---- Cover page ----
+  doc.fontSize(22).text("SEO Performance Report", { align: "center" });
+  doc.moveDown(1.5);
+
+  doc.fontSize(12);
   if (domain) doc.text(`Domain: ${domain}`);
   if (location) doc.text(`Location: ${location}`);
   doc.text(`Current period: ${fmtPeriod(latest)}`);
   if (previous) doc.text(`Compared with: ${fmtPeriod(previous)}`);
   doc.moveDown();
 
-  doc.fontSize(12).fillColor("#000");
-  doc.text(`Tracked keywords: ${tracked}`);
+  doc.fontSize(12).text(`Tracked keywords: ${tracked}`);
   doc.text(`Average position (current): ${avgCurrent.toFixed(1)}`);
   if (hasPrevData) {
     doc.text(`Average position (previous): ${avgPrev.toFixed(1)}`);
     doc.text(
-      `Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)`
+      `Top 10 visibility: ${top10Pct}% (previously ${top10PrevPct}%)`
     );
   } else {
     doc.text(`Top 10 visibility (current): ${top10Pct}%`);
   }
-  doc.moveDown();
 
-  doc.fontSize(11).fillColor("#555");
-  if (hasPrevData) {
-    doc.text(
-      `This period we are tracking ${tracked} keywords. ` +
-        `Average ranking changed from ${avgPrev.toFixed(
-          1
-        )} to ${avgCurrent.toFixed(
-          1
-        )}, with ${top10Pct}% of keywords currently in the top 10.`
-    );
-  } else {
-    doc.text(
-      `This period we are tracking ${tracked} keywords. ` +
-        `Average ranking is ${avgCurrent.toFixed(
-          1
-        )}, with ${top10Pct}% of keywords in the top 10.`
+  if (backlinks && backlinks.totalBacklinks) {
+    doc.moveDown();
+    doc.fontSize(12).text(
+      `Total backlinks created this period: ${backlinks.totalBacklinks}`
     );
   }
 
-  // Winners / losers (only if we have previous data)
+  doc.moveDown(1);
+  doc.fontSize(10).fillColor("#555");
+  doc.text(
+    "This report was generated automatically from your uploaded SEO workbook."
+  );
+
+  // ---- Winners / losers page (if we have comparison data) ----
   if (topWinners.length || topLosers.length) {
     doc.addPage();
-    doc.fontSize(14).fillColor("#000").text("Top Winners", {
+    doc.fontSize(16).fillColor("#000").text("Ranking Movement", {
       underline: true
     });
+    doc.moveDown();
+
+    doc.fontSize(13).text("Top Winners");
     doc.moveDown(0.5);
     doc.fontSize(10);
     if (!topWinners.length) {
@@ -469,15 +547,15 @@ async function buildSeoPdf(res, summary) {
     } else {
       topWinners.forEach((k) => {
         doc.text(
-          `${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (↑ ${
+          `• ${k.keyword}: ${k.previous ?? "-"} → ${k.current ?? "-"} (up ${
             k.change
-          })`
+          } places)`
         );
       });
     }
 
     doc.moveDown();
-    doc.fontSize(14).text("Top Losers", { underline: true });
+    doc.fontSize(13).text("Top Losers");
     doc.moveDown(0.5);
     doc.fontSize(10);
     if (!topLosers.length) {
@@ -485,39 +563,105 @@ async function buildSeoPdf(res, summary) {
     } else {
       topLosers.forEach((k) => {
         doc.text(
-          `${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (${
-            k.change
-          })`
+          `• ${k.keyword}: ${k.previous ?? "-"} → ${k.current ?? "-"} (down ${
+            Math.abs(k.change)
+          } places)`
         );
       });
     }
   }
 
-  // Full table
+  // ---- Keyword detail table ----
   doc.addPage();
-  doc.fontSize(14).fillColor("#000").text("Keyword detail", {
+  doc.fontSize(16).fillColor("#000").text("Keyword Detail", {
     underline: true
   });
-  doc.moveDown(0.5);
-  doc.fontSize(9);
-  doc.text("Keyword                          Prev   Curr   Change");
-  doc.text("------------------------------------------------------");
+  doc.moveDown(0.7);
+
+  doc.fontSize(9).text("Keyword                           Prev  Curr  Change");
+  doc.text("-------------------------------------------------------------");
 
   keywords.forEach((k) => {
-    const prevStr = k.previous ? String(k.previous).padStart(4) : "   -";
-    const currStr = k.current ? String(k.current).padStart(4) : "   -";
-    let changeStr = "   -";
+    const prevStr =
+      k.previous !== null ? String(k.previous).padStart(3) : " - ";
+    const currStr =
+      k.current !== null ? String(k.current).padStart(3) : " - ";
+    let changeStr = "  - ";
     if (k.current !== null && k.previous !== null) {
       const diff = k.previous - k.current;
       if (diff > 0) changeStr = ` ↑${String(diff).padStart(2)}`;
       else if (diff < 0)
         changeStr = ` ↓${String(Math.abs(diff)).padStart(2)}`;
-      else changeStr = "  0";
+      else changeStr = "  0 ";
     }
     const kw =
       k.keyword.length > 30 ? k.keyword.slice(0, 27) + "..." : k.keyword;
-    doc.text(`${kw.padEnd(30)} ${prevStr}  ${currStr}  ${changeStr}`);
+    doc.text(`${kw.padEnd(30)}  ${prevStr}  ${currStr}  ${changeStr}`);
+
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
+      doc.addPage();
+      doc.fontSize(9).text(
+        "Keyword                           Prev  Curr  Change"
+      );
+      doc.text(
+        "-------------------------------------------------------------"
+      );
+    }
   });
+
+  // ---- Backlinks overview ----
+  if (backlinks && backlinks.sections && backlinks.sections.length) {
+    doc.addPage();
+    doc.fontSize(16).fillColor("#000").text("Backlinks Overview", {
+      underline: true
+    });
+    doc.moveDown();
+
+    doc.fontSize(12).text(
+      `Total backlinks in this workbook: ${backlinks.totalBacklinks}`
+    );
+    doc.moveDown(0.5);
+
+    backlinks.sections.forEach((section, idx) => {
+      if (idx > 0) doc.moveDown(0.5);
+      doc.fontSize(12).text(section.name);
+      doc.fontSize(10).text(
+        `Links in this category: ${section.total}`,
+        { indent: 10 }
+      );
+    });
+
+    // One page per category with sample links
+    backlinks.sections.forEach((section) => {
+      doc.addPage();
+      doc.fontSize(16).fillColor("#000").text(section.name, {
+        underline: true
+      });
+      doc.moveDown(0.5);
+      doc.fontSize(11).text(
+        `Total links: ${section.total}. Showing first ${
+          section.rows.length > 10 ? 10 : section.rows.length
+        } links:`
+      );
+      doc.moveDown(0.5);
+      doc.fontSize(9);
+
+      section.rows.slice(0, 10).forEach((row, i) => {
+        const statusText = row.status ? ` [${row.status}]` : "";
+        doc.text(
+          `${i + 1}. ${row.backlink} → ${row.target}${statusText}`
+        );
+        doc.moveDown(0.2);
+      });
+
+      if (section.rows.length > 10) {
+        doc.moveDown(0.5);
+        doc.fontSize(10).text(
+          `... plus ${section.rows.length - 10} more links in this category.`
+        );
+      }
+    });
+  }
 
   doc.end();
 }
@@ -556,7 +700,9 @@ export default async function handler(req, res) {
     if (!res.headersSent) {
       const msg = err && err.message ? err.message : String(err);
       res.statusCode = 500;
-      return res.json({ error: "Failed to generate SEO report: " + msg });
+      return res.json({
+        error: "Failed to generate SEO report: " + msg
+      });
     }
   }
 }
