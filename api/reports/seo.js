@@ -487,9 +487,9 @@ async function buildSeoPdf(res, summary) {
   const right = pageWidth - doc.page.margins.right;
   const contentWidth = right - left;
 
-  // Paths to hero + logo (adjust filenames if yours are different)
-  const heroPath = path.join(process.cwd(), "public", "seo-hero.jpg");
-  const logoPath = path.join(process.cwd(), "public", "webxperts-logo.png");
+  // Paths to hero + logo in /public
+  const heroPath = path.join(process.cwd(), "public", "IMG_0903.jpeg"); // hero
+  const logoPath = path.join(process.cwd(), "public", "IMG_0902.png");  // logo
 
   const fmtPeriod = (info) => {
     if (!info) return "-";
