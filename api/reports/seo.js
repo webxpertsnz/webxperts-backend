@@ -264,7 +264,7 @@ function parseRankingSheet(workbook) {
   const top10 = withCurrent.filter((k) => k.current <= 10).length;
   const top10Prev = withPrev.filter((k) => k.previous <= 10).length;
 
-  // “page 1” + position-1 / position-2 / position-3 stats
+  // “page 1” + position stats
   const page1Count = withCurrent.filter((k) => k.current <= 10).length;
   const pos1Count = withCurrent.filter((k) => k.current === 1).length;
   const pos2Count = withCurrent.filter((k) => k.current === 2).length;
@@ -456,7 +456,6 @@ async function buildSeoPdf(res, summary) {
   const PDFKit = await getPdfKit();
   const {
     domain,
-    // location, // currently not used on hero, to avoid "New Zealand" text
     latest,
     previous,
     tracked,
@@ -500,13 +499,44 @@ async function buildSeoPdf(res, summary) {
   const right = pageWidth - doc.page.margins.right;
   const contentWidth = right - left;
 
-  // Paths to hero + logo in /public
+  // Paths to hero + logos in /public
   const heroPath = path.join(process.cwd(), "public", "IMG_0903.jpeg"); // hero
-  const logoPath = path.join(process.cwd(), "public", "IMG_0902.png"); // logo
+  const logoPath = path.join(process.cwd(), "public", "IMG_0902.png");  // WebXperts logo
+  const googleLogoPath = path.join(process.cwd(), "public", "IMG_0906.png"); // Google logo
 
   const top10Pct = tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
-  const top10PrevPct =
-    tracked > 0 ? Math.round((top10Prev / tracked) * 100) : 0;
+  const prevPage1 = hasPrevData ? top10Prev : null;
+  const top3Count = pos1Count + pos2Count + pos3Count;
+
+  // Overall performance change vs previous average
+  let performanceTrend = "stable performance";
+  let performanceDeltaPct = 0;
+  let performanceDirection = "changed";
+
+  if (hasPrevData && avgPrev > 0) {
+    const diff = avgPrev - avgCurrent; // positive = improvement
+    performanceDeltaPct = Math.round(Math.abs((diff / avgPrev) * 100));
+
+    if (diff > 0.5) {
+      performanceTrend = "strong growth";
+      performanceDirection = "improved";
+    } else if (diff > 0) {
+      performanceTrend = "slight improvement";
+      performanceDirection = "improved";
+    } else if (diff < -0.5) {
+      performanceTrend = "a decline";
+      performanceDirection = "declined";
+    } else if (diff < 0) {
+      performanceTrend = "a slight decline";
+      performanceDirection = "declined";
+    } else {
+      performanceTrend = "no significant change";
+      performanceDirection = "changed";
+    }
+  }
+
+  const newTop10 =
+    hasPrevData && top10 > top10Prev ? top10 - top10Prev : 0;
 
   // ======================================================
   // PAGE 1 – HERO + HIGH LEVEL SUMMARY
@@ -520,7 +550,7 @@ async function buildSeoPdf(res, summary) {
     doc
       .save()
       .rect(0, 0, pageWidth, heroHeight)
-      .fillOpacity(0.7) // darker than before
+      .fillOpacity(0.7)
       .fill(brandDark)
       .fillOpacity(1)
       .restore();
@@ -551,8 +581,6 @@ async function buildSeoPdf(res, summary) {
     .rect(0, heroHeight, pageWidth, doc.page.height - heroHeight)
     .fill("#ffffff")
     .restore();
-
-  doc.y = heroHeight + 30;
 
   // Metric cards (3 per row)
   const cardGap = 10;
@@ -607,11 +635,13 @@ async function buildSeoPdf(res, summary) {
   }
 
   let cardIndex = 0;
+  const cardTopY = heroHeight + 30;
+
   metricCards.forEach((card) => {
     const row = Math.floor(cardIndex / cardsPerRow);
     const col = cardIndex % cardsPerRow;
     const x = left + col * (cardWidth + cardGap);
-    const y = heroHeight + 30 + row * (cardHeight + cardGap);
+    const y = cardTopY + row * (cardHeight + cardGap);
 
     // coloured box
     doc
@@ -640,7 +670,15 @@ async function buildSeoPdf(res, summary) {
     cardIndex++;
   });
 
-  // Logo near bottom-right of page 1 (if present)
+  const cardRows = Math.ceil(metricCards.length / cardsPerRow);
+  let yAfterCards =
+    cardTopY + cardRows * (cardHeight + cardGap) + 20;
+
+  // Logo near bottom-right & Google logo bottom-left (if present)
+  if (fs.existsSync(googleLogoPath)) {
+    doc.image(googleLogoPath, left, doc.page.height - 100, { width: 120 });
+  }
+
   if (fs.existsSync(logoPath)) {
     doc.image(logoPath, right - 140, doc.page.height - 100, { width: 120 });
   }
@@ -664,169 +702,216 @@ async function buildSeoPdf(res, summary) {
     );
 
   // ======================================================
-  // PAGE 2 – NARRATIVE OVERVIEW
+  // EXECUTIVE SUMMARY (immediately under cards on page 1)
   // ======================================================
-  doc.addPage();
+  doc.y = yAfterCards;
 
   doc
-    .fontSize(16)
+    .fontSize(14)
     .fillColor("#000000")
-    .text("Overview", left, doc.y, { underline: true });
+    .text("Executive Summary", left, doc.y, { underline: true });
 
-  doc.moveDown();
+  doc.moveDown(0.5);
 
-  const introLines = [];
+  doc.fontSize(11).fillColor("#333333");
 
-  introLines.push(
-    `We are currently tracking ${tracked} keywords for your website${
-      domain ? " " + domain : ""
-    }.`
-  );
-
-  if (hasPrevData) {
-    introLines.push(
-      `Average ranking moved from ${avgPrev.toFixed(
-        1
-      )} to ${avgCurrent.toFixed(1)}, with a typical (median) position of ${medianCurrent.toFixed(
-        1
-      )}.`
+  if (hasPrevData && performanceDeltaPct > 0) {
+    doc.text(
+      `This month’s SEO performance shows ${performanceTrend} in key metrics. ` +
+        `Performance ${performanceDirection} by approximately ${performanceDeltaPct}% compared to last week.`
     );
   } else {
-    introLines.push(
-      `Average ranking this period is ${avgCurrent.toFixed(
-        1
-      )}, with a typical (median) position of ${medianCurrent.toFixed(1)}.`
+    doc.text(
+      "This month’s SEO performance establishes a baseline for ongoing tracking. Previous-week comparison data is not available in this workbook."
     );
   }
 
-  introLines.push(
-    `${page1Count} of your ${tracked} keywords are currently on page 1 (positions 1–10).`
-  );
-  introLines.push(
-    `${pos1Count} keywords are sitting in position 1, ${pos2Count} in position 2, and ${pos3Count} in position 3.`
-  );
+  doc.moveDown(0.3);
 
-  if (hasPrevData) {
-    introLines.push(
-      `Top 10 visibility is now ${top10Pct}% (previously ${top10PrevPct}%).`
+  const summaryLine = hasPrevData
+    ? `We currently hold ${page1Count} positions on the first page of Google for targeted keywords, with ${newTop10} new top-10 rankings achieved since last week.`
+    : `We currently hold ${page1Count} positions on the first page of Google for targeted keywords.`;
+
+  doc.text(summaryLine);
+
+  // Keyword Rankings subsection
+  doc.moveDown(0.8);
+  doc.fontSize(12).fillColor("#000000").text("Keyword Rankings:");
+  doc.moveDown(0.2);
+  doc.fontSize(11).fillColor("#333333");
+
+  const page1Change =
+    hasPrevData && prevPage1 !== null
+      ? page1Count - prevPage1
+      : null;
+
+  const krLines = [];
+
+  krLines.push(`Total tracked keywords: ${tracked}.`);
+
+  if (hasPrevData && prevPage1 !== null) {
+    const dir =
+      page1Change > 0
+        ? "up"
+        : page1Change < 0
+        ? "down"
+        : "the same as";
+    krLines.push(
+      `First-page positions: ${page1Count} (${dir} ${Math.abs(
+        page1Change
+      ) || ""} from ${prevPage1} last week).`
     );
+  } else {
+    krLines.push(`First-page positions: ${page1Count}.`);
   }
 
+  krLines.push(`Top-3 positions: ${top3Count}.`);
+
+  if (topWinners.length) {
+    const improvements = topWinners
+      .slice(0, 3)
+      .map(
+        (k) =>
+          `'${k.keyword}' climbed from position ${k.previous ?? "-"} to ${
+            k.current ?? "-"
+          }`
+      )
+      .join("; ");
+    krLines.push(`Notable improvements: ${improvements}.`);
+  } else {
+    krLines.push("Notable improvements: no major positive movements this period.");
+  }
+
+  if (topLosers.length) {
+    const focus = topLosers
+      .slice(0, 3)
+      .map(
+        (k) =>
+          `'${k.keyword}' dropped from ${k.previous ?? "-"} to ${
+            k.current ?? "-"
+          }`
+      )
+      .join("; ");
+    krLines.push(`Areas for focus: ${focus}.`);
+  } else {
+    krLines.push("Areas for focus: no significant ranking drops recorded.");
+  }
+
+  krLines.forEach((line) => {
+    doc.text("• " + line, { width: contentWidth });
+  });
+
+  // Backlinks summary (only if we actually have backlink data)
   if (backlinks && backlinks.totalBacklinks) {
-    introLines.push(
-      `This workbook also records ${backlinks.totalBacklinks} backlinks created across your various campaigns.`
-    );
-  }
+    doc.moveDown(0.8);
+    doc.fontSize(12).fillColor("#000000").text("Backlinks and Authority:");
+    doc.moveDown(0.2);
+    doc.fontSize(11).fillColor("#333333");
 
-  doc
-    .fontSize(11)
-    .fillColor("#333333")
-    .text(introLines.join(" "), {
-      width: contentWidth,
-      align: "left"
+    const blLines = [
+      `Links recorded in this workbook: ${backlinks.totalBacklinks}.`
+    ];
+
+    if (backlinks.sections && backlinks.sections.length) {
+      const catSummary = backlinks.sections
+        .map((s) => `${s.name} (${s.total})`)
+        .join(", ");
+      blLines.push(`Key backlink categories: ${catSummary}.`);
+    }
+
+    blLines.forEach((line) => {
+      doc.text("• " + line, { width: contentWidth });
     });
-
-  // ======================================================
-  // PAGE 3 – RANKING MOVEMENT
-  // ======================================================
-  if (topWinners.length || topLosers.length) {
-    doc.addPage();
-
-    doc
-      .fontSize(16)
-      .fillColor("#000000")
-      .text("Ranking Movement", left, doc.y, { underline: true });
-    doc.moveDown();
-
-    // Winners
-    doc
-      .fontSize(13)
-      .fillColor(brandGreen)
-      .text("Top Gainers", left, doc.y);
-    doc.moveDown(0.3);
-
-    doc.fontSize(10).fillColor("#000000");
-    if (!topWinners.length) {
-      doc.text("No improving keywords this period.");
-    } else {
-      topWinners.forEach((k) => {
-        doc.text(
-          `• ${k.keyword}: ${k.previous ?? "-"} → ${
-            k.current ?? "-"
-          } (up ${k.change} places)`
-        );
-      });
-    }
-
-    doc.moveDown();
-
-    // Losers
-    doc
-      .fontSize(13)
-      .fillColor(brandRed)
-      .text("Top Decliners", left, doc.y);
-    doc.moveDown(0.3);
-
-    doc.fontSize(10).fillColor("#000000");
-    if (!topLosers.length) {
-      doc.text("No dropping keywords this period.");
-    } else {
-      topLosers.forEach((k) => {
-        doc.text(
-          `• ${k.keyword}: ${k.previous ?? "-"} → ${
-            k.current ?? "-"
-          } (down ${Math.abs(k.change)} places)`
-        );
-      });
-    }
   }
 
   // ======================================================
-  // PAGE 4+ – KEYWORD TABLE
+  // KEYWORD LIST TABLE (like screenshot)
   // ======================================================
   doc.addPage();
+
   doc
     .fontSize(16)
     .fillColor("#000000")
-    .text("Keyword Detail", left, doc.y, { underline: true });
+    .text("Keyword Rankings Overview", left, doc.y, {
+      underline: true
+    });
 
   doc.moveDown(0.7);
 
-  doc.fontSize(9);
-  doc.fillColor("#000000");
-  doc.text("Keyword                           Prev  Curr  Change");
-  doc.text("-------------------------------------------------------------");
+  const headerY = doc.y;
+  const xCheck = left;
+  const xKeyword = left + 18;
+  const xCurrent = left + 260;
+  const xPrev = left + 370;
 
-  keywords.forEach((k) => {
-    const prevStr =
-      k.previous !== null ? String(k.previous).padStart(3) : " - ";
-    const currStr =
-      k.current !== null ? String(k.current).padStart(3) : " - ";
-    let changeStr = "  - ";
-    if (k.current !== null && k.previous !== null) {
-      const diff = k.previous - k.current;
-      if (diff > 0) changeStr = ` ↑${String(diff).padStart(2)}`;
-      else if (diff < 0)
-        changeStr = ` ↓${String(Math.abs(diff)).padStart(2)}`;
-      else changeStr = "  0 ";
-    }
-    const kw =
-      k.keyword.length > 30 ? k.keyword.slice(0, 27) + "..." : k.keyword;
-    doc.text(`${kw.padEnd(30)}  ${prevStr}  ${currStr}  ${changeStr}`);
+  // Header row
+  doc.fontSize(11).fillColor("#000000");
+  doc.text("Keyword List", xKeyword, headerY);
+  doc.text("Position on Google", xCurrent, headerY);
+  doc.text("Last week", xPrev, headerY);
 
-    if (doc.y > doc.page.height - doc.page.margins.bottom - 40) {
+  doc.moveDown(0.5);
+
+  let y = doc.y + 2;
+  const rowHeight = 18;
+
+  doc.fontSize(10).fillColor("#333333");
+
+  const drawHeaderRow = () => {
+    const yH = doc.y;
+    doc.fontSize(11).fillColor("#000000");
+    doc.text("Keyword List", xKeyword, yH);
+    doc.text("Position on Google", xCurrent, yH);
+    doc.text("Last week", xPrev, yH);
+    doc.moveDown(0.5);
+    y = doc.y + 2;
+    doc.fontSize(10).fillColor("#333333");
+  };
+
+  keywords.forEach((k, index) => {
+    // page break
+    if (y > doc.page.height - doc.page.margins.bottom - 30) {
       doc.addPage();
-      doc
-        .fontSize(9)
-        .text("Keyword                           Prev  Curr  Change");
-      doc.text(
-        "-------------------------------------------------------------"
-      );
+      drawHeaderRow();
     }
+
+    // checkbox square
+    doc
+      .save()
+      .rect(xCheck, y + 4, 8, 8)
+      .strokeColor("#aaaaaa")
+      .lineWidth(1)
+      .stroke()
+      .restore();
+
+    // tick
+    doc.fontSize(8).fillColor("#555555").text("✓", xCheck + 1, y + 2);
+
+    // keyword text
+    doc.fontSize(10).fillColor("#333333");
+    doc.text(k.keyword, xKeyword, y, {
+      width: xCurrent - xKeyword - 10
+    });
+
+    // current position
+    const currentStr =
+      k.current !== null && k.current !== undefined
+        ? String(k.current)
+        : "-";
+    doc.text(currentStr, xCurrent, y, { width: 60 });
+
+    // previous position
+    const prevStr =
+      k.previous !== null && k.previous !== undefined
+        ? String(k.previous)
+        : "-";
+    doc.text(prevStr, xPrev, y, { width: 60 });
+
+    y += rowHeight;
   });
 
   // ======================================================
-  // BACKLINKS PAGES
+  // BACKLINKS PAGES (detailed), if present
   // ======================================================
   if (backlinks && backlinks.sections && backlinks.sections.length) {
     // Overview
@@ -857,7 +942,7 @@ async function buildSeoPdf(res, summary) {
         });
     });
 
-    // One page per backlink category
+    // One page per backlink category (first 10 links)
     backlinks.sections.forEach((section) => {
       doc.addPage();
       doc
