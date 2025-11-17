@@ -312,11 +312,10 @@ function parseRankingSheet(workbook) {
   };
 }
 
-// ---------- Backlink extraction (more robust header detection) ----------
+// ---------- Backlink extraction ----------
 function parseBacklinkSheet(sheet, sheetName) {
   const maxHeaderRows = Math.min(10, sheet.rowCount);
 
-  // First pass: detect which rows look like headers (have "Backlinks")
   const candidateRows = [];
   for (let r = 1; r <= maxHeaderRows; r++) {
     const row = sheet.getRow(r);
@@ -344,7 +343,6 @@ function parseBacklinkSheet(sheet, sheetName) {
     return { name: sheetName, total: 0, rows: [] };
   }
 
-  // Prefer a row that also has Target or Status, otherwise first with Backlinks
   candidateRows.sort((a, b) => {
     const scoreA = (a.hasTarget ? 1 : 0) + (a.hasStatus ? 1 : 0);
     const scoreB = (b.hasTarget ? 1 : 0) + (b.hasStatus ? 1 : 0);
@@ -374,7 +372,6 @@ function parseBacklinkSheet(sheet, sheetName) {
   });
 
   if (!backlinkCol) {
-    // fall back: any cell on that row containing "backlink"
     headerRow.eachCell((cell, col) => {
       const label = cellToString(cell.value).trim().toLowerCase();
       if (label.includes("backlink") && !backlinkCol) backlinkCol = col;
@@ -485,18 +482,15 @@ async function buildSeoPdf(res, summary) {
   const {
     domain,
     latest,
-    previous,
     tracked,
     avgCurrent,
     avgPrev,
-    medianCurrent,
-    medianPrev,
-    top10,
-    top10Prev,
-    page1Count,
     pos1Count,
     pos2Count,
     pos3Count,
+    page1Count,
+    top10,
+    top10Prev,
     hasPrevData,
     keywords,
     topWinners,
@@ -585,9 +579,10 @@ async function buildSeoPdf(res, summary) {
   doc
     .fillColor("#ffffff")
     .fontSize(22)
+    .font("Helvetica-Bold")
     .text("SEO Report", left, 60);
 
-  doc.fontSize(14);
+  doc.fontSize(14).font("Helvetica");
   if (domain) doc.text(domain, left, 95);
 
   const dateText = `Report date: ${formatDateNZ(latest)}`;
@@ -639,6 +634,7 @@ async function buildSeoPdf(res, summary) {
     doc
       .fillColor("#ffffff")
       .fontSize(11)
+      .font("Helvetica")
       .text(card.label, x + 8, y + 8, {
         width: cardWidth - 16
       });
@@ -648,25 +644,25 @@ async function buildSeoPdf(res, summary) {
       .font("Helvetica-Bold")
       .text(card.value, x + 8, y + 26, {
         width: cardWidth - 16
-      })
-      .font("Helvetica");
+      });
 
     cardIndex++;
   });
 
-  const yAfterCards = cardTopY + cardHeight + 25;
-
-  // ---------- Executive Summary block with nicer spacing ----------
+  // Push Executive Summary a bit further down from the cards
+  const yAfterCards = cardTopY + cardHeight + 45;
   doc.y = yAfterCards;
 
+  // ---------- Executive Summary heading ----------
   doc
-    .fontSize(14)
+    .fontSize(16)
+    .font("Helvetica-Bold")
     .fillColor("#000000")
-    .text("Executive Summary", left, doc.y, { underline: true });
+    .text("Executive Summary", left, doc.y);
 
-  doc.moveDown(0.7);
+  doc.moveDown(0.8);
 
-  doc.fontSize(11).fillColor("#333333");
+  doc.fontSize(11).font("Helvetica").fillColor("#333333");
 
   if (hasPrevData && performanceDeltaPct > 0) {
     doc.text(
@@ -681,7 +677,7 @@ async function buildSeoPdf(res, summary) {
     );
   }
 
-  doc.moveDown(0.5);
+  doc.moveDown(0.6);
 
   const summaryLine = hasPrevData
     ? `We currently hold ${page1Count} positions on the first page of Google for targeted keywords, with ${newTop10} new top-10 rankings achieved since last week.`
@@ -690,10 +686,15 @@ async function buildSeoPdf(res, summary) {
   doc.text(summaryLine, { width: contentWidth });
 
   // Keyword rankings sub-section
-  doc.moveDown(1.0);
-  doc.fontSize(12).fillColor("#000000").text("Keyword Rankings:");
-  doc.moveDown(0.4);
-  doc.fontSize(11).fillColor("#333333");
+  doc.moveDown(1.2);
+  doc
+    .fontSize(13)
+    .font("Helvetica-Bold")
+    .fillColor("#000000")
+    .text("Keyword Rankings:");
+
+  doc.moveDown(0.5);
+  doc.fontSize(11).font("Helvetica").fillColor("#333333");
 
   const page1Change =
     hasPrevData && prevPage1 !== null
@@ -755,12 +756,17 @@ async function buildSeoPdf(res, summary) {
     doc.text("• " + line, { width: contentWidth });
   });
 
-  // Backlinks summary as a clearly separated section
+  // Extra breathing room before Backlinks & Authority
   if (backlinks && backlinks.totalBacklinks) {
-    doc.moveDown(1.2);
-    doc.fontSize(12).fillColor("#000000").text("Backlinks and Authority:");
-    doc.moveDown(0.4);
-    doc.fontSize(11).fillColor("#333333");
+    doc.moveDown(2.0);
+    doc
+      .fontSize(13)
+      .font("Helvetica-Bold")
+      .fillColor("#000000")
+      .text("Backlinks and Authority:");
+
+    doc.moveDown(0.5);
+    doc.fontSize(11).font("Helvetica").fillColor("#333333");
 
     const parts = [];
     if (backlinks.sections && backlinks.sections.length) {
@@ -779,19 +785,27 @@ async function buildSeoPdf(res, summary) {
     doc.text(line, { width: contentWidth });
   }
 
-  // NOTE: footer/logos removed on purpose to avoid blank extra page
-
   // ======================================================
   // KEYWORD LIST TABLE
   // ======================================================
   doc.addPage();
 
+  // Title (no underline) + short description
   doc
     .fontSize(16)
+    .font("Helvetica-Bold")
     .fillColor("#000000")
-    .text("Keyword Rankings Overview", left, doc.y, {
-      underline: true
-    });
+    .text("Keyword Rankings Overview", left, doc.y);
+
+  doc.moveDown(0.3);
+  doc
+    .fontSize(10)
+    .font("Helvetica")
+    .fillColor("#555555")
+    .text(
+      "This table summarises each optimised keyword, its current Google position and last week’s position so you can quickly see week-on-week movement.",
+      { width: contentWidth }
+    );
 
   doc.moveDown(0.7);
 
@@ -802,7 +816,7 @@ async function buildSeoPdf(res, summary) {
 
   function drawKeywordHeader() {
     const headerY = doc.y;
-    doc.fontSize(11).fillColor("#000000");
+    doc.fontSize(11).font("Helvetica-Bold").fillColor("#000000");
     doc.text("Keyword List", xKeyword, headerY);
     doc.text("Position", xCurrent, headerY);
     doc.text("Last week", xPrev, headerY);
@@ -814,19 +828,19 @@ async function buildSeoPdf(res, summary) {
   let y = doc.y + 2;
   const rowHeight = 18;
 
-  doc.fontSize(10).fillColor("#333333");
+  doc.fontSize(10).font("Helvetica").fillColor("#333333");
 
   keywords.forEach((k) => {
     if (y > doc.page.height - doc.page.margins.bottom - 30) {
       doc.addPage();
       drawKeywordHeader();
       y = doc.y + 2;
-      doc.fontSize(10).fillColor("#333333");
+      doc.fontSize(10).font("Helvetica").fillColor("#333333");
     }
 
-    doc.fontSize(11).fillColor(brandGreen).text("✓", xCheck, y + 2);
+    doc.fontSize(11).font("Helvetica-Bold").fillColor(brandGreen).text("✓", xCheck, y + 2);
 
-    doc.fontSize(10).fillColor("#333333");
+    doc.fontSize(10).font("Helvetica").fillColor("#333333");
     doc.text(k.keyword, xKeyword, y, {
       width: xCurrent - xKeyword - 10
     });
@@ -847,18 +861,21 @@ async function buildSeoPdf(res, summary) {
   });
 
   // ======================================================
-  // BACKLINKS OVERVIEW + DETAILS (compact)
+  // BACKLINKS OVERVIEW + DETAILS (compact, nicer headings)
   // ======================================================
   if (backlinks && backlinks.sections && backlinks.sections.length) {
     doc.addPage();
     doc
       .fontSize(16)
+      .font("Helvetica-Bold")
       .fillColor("#000000")
-      .text("Backlinks Overview", left, doc.y, { underline: true });
+      .text("Backlinks Overview", left, doc.y);
+
     doc.moveDown(0.7);
 
     doc
       .fontSize(11)
+      .font("Helvetica")
       .fillColor("#333333")
       .text(
         `Total backlinks in this workbook: ${backlinks.totalBacklinks}.`,
@@ -877,24 +894,25 @@ async function buildSeoPdf(res, summary) {
 
     doc.moveDown(1.0);
 
-    // Now list each category, sharing pages, up to 5 links each
+    // Details – titles bold, no underline, allow flow to next pages
     backlinks.sections.forEach((section, idx) => {
-      // space check
       if (doc.y > doc.page.height - doc.page.margins.bottom - 80) {
         doc.addPage();
       }
 
       doc
         .fontSize(13)
+        .font("Helvetica-Bold")
         .fillColor("#000000")
-        .text(section.name, left, doc.y, { underline: true });
-      doc.moveDown(0.3);
+        .text(section.name, left, doc.y);
 
+      doc.moveDown(0.35);
       const maxLinks = 5;
       const shown = Math.min(section.rows.length, maxLinks);
 
       doc
         .fontSize(10)
+        .font("Helvetica")
         .fillColor("#333333")
         .text(
           `Total links: ${section.total}. Showing first ${shown} links:`,
@@ -902,10 +920,24 @@ async function buildSeoPdf(res, summary) {
         );
       doc.moveDown(0.3);
 
-      doc.fontSize(9).fillColor("#000000");
+      const bottomLimit = doc.page.height - doc.page.margins.bottom - 40;
+
+      doc.fontSize(9).fillColor("#000000").font("Helvetica");
       section.rows.slice(0, maxLinks).forEach((row, i) => {
         const url = row.backlink || row.target || "";
         const statusText = row.status ? ` [${row.status}]` : "";
+
+        if (doc.y > bottomLimit) {
+          doc.addPage();
+          doc
+            .fontSize(13)
+            .font("Helvetica-Bold")
+            .fillColor("#000000")
+            .text(section.name + " (cont.)", left, doc.y);
+          doc.moveDown(0.3);
+          doc.fontSize(9).font("Helvetica").fillColor("#000000");
+        }
+
         doc.text(`${i + 1}. ${url}${statusText}`, { width: contentWidth });
       });
 
@@ -913,6 +945,7 @@ async function buildSeoPdf(res, summary) {
         doc.moveDown(0.2);
         doc
           .fontSize(9)
+          .font("Helvetica")
           .fillColor("#555555")
           .text(
             `... plus ${section.rows.length - maxLinks} more links in this category.`,
@@ -920,17 +953,19 @@ async function buildSeoPdf(res, summary) {
           );
       }
 
-      doc.moveDown(0.4);
+      doc.moveDown(0.35);
       doc
         .fontSize(9)
+        .font("Helvetica")
         .fillColor("#444444")
         .text(
           "What this means: " + describeBacklinkType(section.name),
           { width: contentWidth }
         );
 
+      // Extra spacing between sections so it doesn’t feel crammed
       if (idx < backlinks.sections.length - 1) {
-        doc.moveDown(0.9);
+        doc.moveDown(1.2);
       }
     });
   }
