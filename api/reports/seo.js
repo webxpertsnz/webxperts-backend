@@ -1,196 +1,375 @@
 // api/reports/seo.js
+//
+// Accepts multipart/form-data with field "seo_file",
+// parses the Excel ranking sheet and returns a PDF summary.
 
-const express = require('express');
-const multer = require('multer');
-const { parse } = require('csv-parse/sync');
-const PDFDocument = require('pdfkit');
+import formidable from "formidable";
+import ExcelJS from "exceljs";
+import PDFDocument from "pdfkit";
 
-const router = express.Router();
+// ---------- helpers ----------
 
-// Multer config – keep file in memory
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
-  },
-});
-
-// POST /api/reports/seo
-router.post('/seo', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'No file uploaded' });
-    }
-
-    // Parse CSV
-    let records;
-    try {
-      records = parse(req.file.buffer.toString('utf-8'), {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-      });
-    } catch (err) {
-      console.error('CSV parse error:', err);
-      return res
-        .status(400)
-        .json({ success: false, message: 'Invalid CSV format' });
-    }
-
-    if (!records || records.length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'CSV contains no data rows' });
-    }
-
-    // Group rows by "Tab" column if it exists
-    const hasTabColumn = Object.prototype.hasOwnProperty.call(
-      records[0],
-      'Tab'
-    );
-
-    const tabMap = new Map();
-
-    if (hasTabColumn) {
-      for (const row of records) {
-        const tabName = row.Tab && row.Tab.trim() ? row.Tab.trim() : 'Data';
-        if (!tabMap.has(tabName)) tabMap.set(tabName, []);
-        tabMap.get(tabName).push(row);
-      }
-    } else {
-      // Fallback: everything in a single tab
-      tabMap.set('SEO Data', records);
-    }
-
-    // Start PDF
-    const doc = new PDFDocument({ margin: 40 });
-
-    const chunks = [];
-    doc.on('data', (chunk) => chunks.push(chunk));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        'attachment; filename="seo-report.pdf"'
-      );
-      res.send(pdfBuffer);
+function parseForm(req) {
+  return new Promise((resolve, reject) => {
+    const form = formidable({ multiples: false });
+    form.parse(req, (err, fields, files) => {
+      if (err) return reject(err);
+      resolve({ fields, files });
     });
+  });
+}
 
-    // Basic header info from first row (if exists in your CSV)
-    const firstRow = records[0];
-    const clientName =
-      firstRow.Client ||
-      firstRow['Client Name'] ||
-      firstRow['Client'] ||
-      '';
-    const website =
-      firstRow.Website || firstRow.Domain || firstRow['Website URL'] || '';
-    const month =
-      firstRow.Month || firstRow['Report Month'] || firstRow['Period'] || '';
+function parseHeaderDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === "number") {
+    // Excel serial date
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const dt = new Date(excelEpoch.getTime() + value * 86400000);
+    return isNaN(dt) ? null : dt;
+  }
+  const text = typeof value === "string" ? value : value.text || "";
+  const dt = new Date(text);
+  return isNaN(dt) ? null : dt;
+}
 
-    // Cover page
-    doc.fontSize(22).text('SEO Performance Report', { align: 'center' });
-    doc.moveDown();
+// ---------- Excel parsing ----------
 
-    if (clientName) {
-      doc.fontSize(14).text(`Client: ${clientName}`);
+async function parseSeoWorkbook(filePath) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+
+  // Prefer "Ranking" sheet, else first sheet
+  let rankingSheet = workbook.getWorksheet("Ranking");
+  if (!rankingSheet) rankingSheet = workbook.worksheets[0];
+  if (!rankingSheet) {
+    throw new Error("No worksheets found in uploaded file.");
+  }
+
+  // Domain/location in first 10 rows if present
+  let domain = "";
+  let location = "";
+  for (let r = 1; r <= Math.min(10, rankingSheet.rowCount); r++) {
+    const a = (rankingSheet.getCell(r, 1).value || "").toString().trim().toLowerCase();
+    const b = rankingSheet.getCell(r, 2).value;
+    if (a === "domain" || a === "website") domain = b ? String(b) : "";
+    if (a === "location") location = b ? String(b) : "";
+  }
+
+  // Find header row & keyword column: look for ANY cell equal to "keyword"
+  let headerRowNumber = null;
+  let keywordCol = null;
+
+  outer: for (let r = 1; r <= rankingSheet.rowCount; r++) {
+    const row = rankingSheet.getRow(r);
+    for (let c = 1; c <= row.cellCount; c++) {
+      const v = row.getCell(c).value;
+      const text = (v || "").toString().trim().toLowerCase();
+      if (text === "keyword") {
+        headerRowNumber = r;
+        keywordCol = c;
+        break outer;
+      }
     }
-    if (website) {
-      doc.fontSize(14).text(`Website: ${website}`);
-    }
-    if (month) {
-      doc.fontSize(14).text(`Reporting Period: ${month}`);
-    }
+  }
 
-    doc.moveDown(2);
-    doc.fontSize(10).text(
-      'This report has been generated automatically from your uploaded CSV data.',
-      { align: 'left' }
+  if (!headerRowNumber || !keywordCol) {
+    throw new Error(
+      "Could not find a header cell with text 'Keyword' in any column. " +
+      "Check the ranking sheet header row."
     );
+  }
 
-    // Each tab = its own section
-    let isFirstTab = true;
+  const headerRow = rankingSheet.getRow(headerRowNumber);
 
-    for (const [tabName, rows] of tabMap.entries()) {
-      if (!isFirstTab) {
-        doc.addPage();
-      } else {
-        doc.addPage(); // start first tab on a fresh page after cover
-        isFirstTab = false;
-      }
+  // Detect URL column & date columns from that header row
+  let urlCol = null;
+  const dateCols = [];
 
-      doc.fontSize(18).text(tabName, { underline: true });
-      doc.moveDown();
+  headerRow.eachCell((cell, col) => {
+    const raw = cell.value;
+    const label = (raw || "").toString().trim().toLowerCase();
 
-      if (!rows || rows.length === 0) {
-        doc.fontSize(10).text('No data available for this section.');
-        continue;
-      }
-
-      // Determine columns (exclude the Tab column itself)
-      const allKeys = Object.keys(rows[0]);
-      const columns = hasTabColumn
-        ? allKeys.filter((k) => k !== 'Tab')
-        : allKeys;
-
-      // Table header
-      doc.fontSize(11).text(columns.join('  |  '));
-      doc.moveDown(0.5);
-
-      // Divider
-      doc
-        .moveTo(doc.page.margins.left, doc.y)
-        .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-        .stroke();
-      doc.moveDown(0.5);
-
-      // Table rows
-      doc.fontSize(9);
-      for (const row of rows) {
-        const values = columns.map((key) => (row[key] ?? '').toString());
-        doc.text(values.join('  |  '));
-
-        // Simple pagination safety
-        if (doc.y > doc.page.height - doc.page.margins.bottom - 50) {
-          doc.addPage();
-          doc.fontSize(11).text(columns.join('  |  '));
-          doc.moveDown(0.5);
-          doc
-            .moveTo(doc.page.margins.left, doc.y)
-            .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-            .stroke();
-          doc.moveDown(0.5);
-          doc.fontSize(9);
-        }
-      }
+    if (
+      ["url", "landing page", "page", "target url"].includes(label)
+    ) {
+      urlCol = col;
+      return;
     }
 
-    doc.end();
-  } catch (err) {
-    console.error('Unexpected error in SEO report API:', err);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error while generating SEO report',
+    const dt = parseHeaderDate(raw);
+    if (dt) {
+      dateCols.push({ col, date: dt });
+    }
+  });
+
+  if (!dateCols.length) {
+    throw new Error(
+      "No date-like headers found in the header row. " +
+      "Make sure your ranking sheet has dates as column headings (e.g. 2025-11-10)."
+    );
+  }
+
+  dateCols.sort((a, b) => a.date - b.date);
+  const latest = dateCols[dateCols.length - 1];
+  const previous = dateCols.length >= 2 ? dateCols[dateCols.length - 2] : null;
+
+  // Collect keyword rows beneath the header
+  const keywords = [];
+  for (let r = headerRowNumber + 1; r <= rankingSheet.rowCount; r++) {
+    const row = rankingSheet.getRow(r);
+    const kwVal = row.getCell(keywordCol).value;
+    if (!kwVal) continue;
+    const kw = String(kwVal).trim();
+    if (!kw) continue;
+
+    const urlVal = urlCol ? row.getCell(urlCol).value : "";
+    const url = urlVal ? String(urlVal) : "";
+
+    const curRaw = row.getCell(latest.col).value;
+    const prevRaw = previous ? row.getCell(previous.col).value : null;
+
+    const cur =
+      typeof curRaw === "number"
+        ? curRaw
+        : curRaw
+        ? Number(curRaw)
+        : null;
+    const prev =
+      typeof prevRaw === "number"
+        ? prevRaw
+        : prevRaw
+        ? Number(prevRaw)
+        : null;
+
+    keywords.push({
+      keyword: kw,
+      url,
+      current: cur && cur > 0 ? cur : null,
+      previous: prev && prev > 0 ? prev : null
     });
   }
-});
 
-module.exports = router;
+  if (!keywords.length) {
+    throw new Error(
+      "No keyword rows found under the header. " +
+      "Check that your ranking sheet has data below the 'Keyword' row."
+    );
+  }
 
-/*
-  HOW TO USE / MOUNT THIS ROUTER:
+  const tracked = keywords.length;
+  const withCurrent = keywords.filter((k) => k.current !== null);
+  const withPrev = keywords.filter((k) => k.previous !== null);
 
-  In your main Express app (e.g. server.js or index.js):
+  const avgCurrent =
+    withCurrent.reduce((sum, k) => sum + k.current, 0) /
+    (withCurrent.length || 1);
+  const avgPrev =
+    withPrev.reduce((sum, k) => sum + k.previous, 0) /
+    (withPrev.length || 1);
 
-  const express = require('express');
-  const seoReportsRouter = require('./api/reports/seo');
+  const top10 = withCurrent.filter((k) => k.current <= 10).length;
+  const top10Prev = withPrev.filter((k) => k.previous <= 10).length;
 
-  const app = express();
-  app.use('/api/reports', seoReportsRouter);
+  const movers = keywords
+    .map((k) => ({
+      ...k,
+      change:
+        k.current !== null && k.previous !== null
+          ? k.previous - k.current // +ve = improved
+          : null
+    }))
+    .filter((k) => k.change !== null);
 
-  // Then your frontend should POST to: /api/reports/seo
-  // with multipart/form-data where the file field name is "file".
-*/
+  const topWinners = movers
+    .filter((k) => k.change > 0)
+    .sort((a, b) => b.change - a.change)
+    .slice(0, 10);
+
+  const topLosers = movers
+    .filter((k) => k.change < 0)
+    .sort((a, b) => a.change - b.change)
+    .slice(0, 10);
+
+  return {
+    domain,
+    location,
+    latest,
+    previous,
+    tracked,
+    avgCurrent,
+    avgPrev,
+    top10,
+    top10Prev,
+    keywords,
+    topWinners,
+    topLosers
+  };
+}
+
+// ---------- PDF generation ----------
+
+function buildSeoPdf(res, summary) {
+  const {
+    domain,
+    location,
+    latest,
+    previous,
+    tracked,
+    avgCurrent,
+    avgPrev,
+    top10,
+    top10Prev,
+    keywords,
+    topWinners,
+    topLosers
+  } = summary;
+
+  const doc = new PDFDocument({ margin: 40 });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    attachment; filename="SEO-Report-${domain || "site"}.pdf"
+  );
+
+  doc.pipe(res);
+
+  const fmtDate = (obj) =>
+    obj && obj.date ? obj.date.toISOString().slice(0, 10) : "-";
+
+  const top10Pct =
+    tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
+  const top10PrevPct =
+    tracked > 0 ? Math.round((top10Prev / tracked) * 100) : 0;
+
+  // Cover
+  doc.fontSize(18).text("SEO Weekly Report");
+  doc.moveDown(0.5);
+  doc.fontSize(11).fillColor("#555");
+  if (domain) doc.text(Domain: ${domain});
+  if (location) doc.text(Location: ${location});
+  doc.text(Week ending: ${fmtDate(latest)});
+  if (previous) doc.text(Compared with: ${fmtDate(previous)});
+  doc.moveDown();
+
+  doc.fontSize(12).fillColor("#000");
+  doc.text(Tracked keywords: ${tracked});
+  doc.text(
+    Average position: ${avgCurrent.toFixed(1)} (prev ${avgPrev.toFixed(1)})
+  );
+  doc.text(
+    Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)
+  );
+  doc.moveDown();
+
+  doc.fontSize(11).fillColor("#555");
+  doc.text(
+    `This week we are tracking ${tracked} keywords. ` +
+      `Average ranking changed from ${avgPrev.toFixed(
+        1
+      )} to ${avgCurrent.toFixed(
+        1
+      )}, with ${top10Pct}% of keywords in the top 10.`
+  );
+
+  // Winners / losers
+  doc.addPage();
+  doc.fontSize(14).fillColor("#000").text("Top Winners", { underline: true });
+  doc.moveDown(0.5);
+  doc.fontSize(10);
+  if (!topWinners.length) {
+    doc.text("No improving keywords this period.");
+  } else {
+    topWinners.forEach((k) => {
+      doc.text(
+        ${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (↑ ${k.change})
+      );
+    });
+  }
+
+  doc.moveDown();
+  doc.fontSize(14).text("Top Losers", { underline: true });
+  doc.moveDown(0.5);
+  doc.fontSize(10);
+  if (!topLosers.length) {
+    doc.text("No dropping keywords this period.");
+  } else {
+    topLosers.forEach((k) => {
+      doc.text(
+        ${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (${k.change})
+      );
+    });
+  }
+
+  // Full table
+  doc.addPage();
+  doc.fontSize(14).fillColor("#000").text("Keyword detail", {
+    underline: true
+  });
+  doc.moveDown(0.5);
+  doc.fontSize(9);
+  doc.text("Keyword                          Prev   Curr   Change");
+  doc.text("------------------------------------------------------");
+
+  keywords.forEach((k) => {
+    const prevStr = k.previous ? String(k.previous).padStart(4) : "   -";
+    const currStr = k.current ? String(k.current).padStart(4) : "   -";
+    let changeStr = "   -";
+    if (k.current !== null && k.previous !== null) {
+      const diff = k.previous - k.current;
+      if (diff > 0) changeStr = ` ↑${String(diff).padStart(2)}`;
+      else if (diff < 0)
+        changeStr = ` ↓${String(Math.abs(diff)).padStart(2)}`;
+      else changeStr = "  0";
+    }
+    const kw =
+      k.keyword.length > 30
+        ? k.keyword.slice(0, 27) + "..."
+        : k.keyword;
+    doc.text(${kw.padEnd(30)} ${prevStr}  ${currStr}  ${changeStr});
+  });
+
+  doc.end();
+}
+
+// ---------- main handler ----------
+
+export default async function handler(req, res) {
+  try {
+    if (req.method === "GET") {
+      return res
+        .status(200)
+        .json({ ok: true, message: "SEO reports API is alive" });
+    }
+
+    if (req.method !== "POST") {
+      res.setHeader("Allow", ["GET", "POST"]);
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    const { files } = await parseForm(req);
+    const file = files.seo_file;
+    if (!file) {
+      return res.status(400).json({ error: "Missing seo_file upload" });
+    }
+
+    const filePath = Array.isArray(file) ? file[0].filepath : file.filepath;
+    if (!filePath) {
+      return res
+        .status(400)
+        .json({ error: "Could not access uploaded file path" });
+    }
+
+    const summary = await parseSeoWorkbook(filePath);
+    buildSeoPdf(res, summary);
+  } catch (err) {
+    console.error("SEO report error:", err);
+    if (!res.headersSent) {
+      const msg = err && err.message ? err.message : String(err);
+      return res.status(500).json({
+        error: "Failed to generate SEO report: " + msg
+      });
+    }
+  }
+}
