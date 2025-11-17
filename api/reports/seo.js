@@ -1,15 +1,25 @@
-// api/reports/seo.js
+This is the last script you have me ? // api/reports/seo.js
 //
-// Accepts multipart/form-data with field "seo_file",
-// parses the Excel ranking sheet and returns a PDF summary.
+// Reads an uploaded SEO Excel file and generates a PDF summary.
+// Uses dynamic imports for exceljs/formidable so the function
+// doesn't crash at load time.
 
-import formidable from "formidable";
-import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 
-// ---------- helpers ----------
+// ---- dynamic imports ----
+async function getFormidable() {
+  const mod = await import("formidable");
+  return mod.default || mod; // handle both ESM/CJS
+}
 
-function parseForm(req) {
+async function getExcelJS() {
+  const mod = await import("exceljs");
+  return mod.default || mod;
+}
+
+// ---- helpers ----
+async function parseForm(req) {
+  const formidable = await getFormidable();
   return new Promise((resolve, reject) => {
     const form = formidable({ multiples: false });
     form.parse(req, (err, fields, files) => {
@@ -33,9 +43,9 @@ function parseHeaderDate(value) {
   return isNaN(dt) ? null : dt;
 }
 
-// ---------- Excel parsing ----------
-
+// ---- Excel parsing ----
 async function parseSeoWorkbook(filePath) {
+  const ExcelJS = await getExcelJS();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
 
@@ -46,7 +56,7 @@ async function parseSeoWorkbook(filePath) {
     throw new Error("No worksheets found in uploaded file.");
   }
 
-  // Domain/location in first 10 rows if present
+  // Domain/location (optional) in first 10 rows
   let domain = "";
   let location = "";
   for (let r = 1; r <= Math.min(10, rankingSheet.rowCount); r++) {
@@ -56,7 +66,7 @@ async function parseSeoWorkbook(filePath) {
     if (a === "location") location = b ? String(b) : "";
   }
 
-  // Find header row & keyword column: look for ANY cell equal to "keyword"
+  // Find header row & keyword column: any cell with "keyword"
   let headerRowNumber = null;
   let keywordCol = null;
 
@@ -76,13 +86,13 @@ async function parseSeoWorkbook(filePath) {
   if (!headerRowNumber || !keywordCol) {
     throw new Error(
       "Could not find a header cell with text 'Keyword' in any column. " +
-      "Check the ranking sheet header row."
+        "Check the ranking sheet header row."
     );
   }
 
   const headerRow = rankingSheet.getRow(headerRowNumber);
 
-  // Detect URL column & date columns from that header row
+  // URL column & date columns from header row
   let urlCol = null;
   const dateCols = [];
 
@@ -90,9 +100,7 @@ async function parseSeoWorkbook(filePath) {
     const raw = cell.value;
     const label = (raw || "").toString().trim().toLowerCase();
 
-    if (
-      ["url", "landing page", "page", "target url"].includes(label)
-    ) {
+    if (["url", "landing page", "page", "target url"].includes(label)) {
       urlCol = col;
       return;
     }
@@ -106,7 +114,7 @@ async function parseSeoWorkbook(filePath) {
   if (!dateCols.length) {
     throw new Error(
       "No date-like headers found in the header row. " +
-      "Make sure your ranking sheet has dates as column headings (e.g. 2025-11-10)."
+        "Make sure your ranking sheet has dates as column headings (e.g. 2025-11-10)."
     );
   }
 
@@ -114,7 +122,7 @@ async function parseSeoWorkbook(filePath) {
   const latest = dateCols[dateCols.length - 1];
   const previous = dateCols.length >= 2 ? dateCols[dateCols.length - 2] : null;
 
-  // Collect keyword rows beneath the header
+  // Collect keyword rows
   const keywords = [];
   for (let r = headerRowNumber + 1; r <= rankingSheet.rowCount; r++) {
     const row = rankingSheet.getRow(r);
@@ -130,17 +138,9 @@ async function parseSeoWorkbook(filePath) {
     const prevRaw = previous ? row.getCell(previous.col).value : null;
 
     const cur =
-      typeof curRaw === "number"
-        ? curRaw
-        : curRaw
-        ? Number(curRaw)
-        : null;
+      typeof curRaw === "number" ? curRaw : curRaw ? Number(curRaw) : null;
     const prev =
-      typeof prevRaw === "number"
-        ? prevRaw
-        : prevRaw
-        ? Number(prevRaw)
-        : null;
+      typeof prevRaw === "number" ? prevRaw : prevRaw ? Number(prevRaw) : null;
 
     keywords.push({
       keyword: kw,
@@ -153,7 +153,7 @@ async function parseSeoWorkbook(filePath) {
   if (!keywords.length) {
     throw new Error(
       "No keyword rows found under the header. " +
-      "Check that your ranking sheet has data below the 'Keyword' row."
+        "Check that your ranking sheet has data below the 'Keyword' row."
     );
   }
 
@@ -176,7 +176,7 @@ async function parseSeoWorkbook(filePath) {
       ...k,
       change:
         k.current !== null && k.previous !== null
-          ? k.previous - k.current // +ve = improved
+          ? k.previous - k.current
           : null
     }))
     .filter((k) => k.change !== null);
@@ -207,8 +207,7 @@ async function parseSeoWorkbook(filePath) {
   };
 }
 
-// ---------- PDF generation ----------
-
+// ---- PDF generation ----
 function buildSeoPdf(res, summary) {
   const {
     domain,
@@ -230,7 +229,7 @@ function buildSeoPdf(res, summary) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
-    attachment; filename="SEO-Report-${domain || "site"}.pdf"
+    `attachment; filename="SEO-Report-${domain || "site"}.pdf"`
   );
 
   doc.pipe(res);
@@ -238,8 +237,7 @@ function buildSeoPdf(res, summary) {
   const fmtDate = (obj) =>
     obj && obj.date ? obj.date.toISOString().slice(0, 10) : "-";
 
-  const top10Pct =
-    tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
+  const top10Pct = tracked > 0 ? Math.round((top10 / tracked) * 100) : 0;
   const top10PrevPct =
     tracked > 0 ? Math.round((top10Prev / tracked) * 100) : 0;
 
@@ -247,19 +245,19 @@ function buildSeoPdf(res, summary) {
   doc.fontSize(18).text("SEO Weekly Report");
   doc.moveDown(0.5);
   doc.fontSize(11).fillColor("#555");
-  if (domain) doc.text(Domain: ${domain});
-  if (location) doc.text(Location: ${location});
-  doc.text(Week ending: ${fmtDate(latest)});
-  if (previous) doc.text(Compared with: ${fmtDate(previous)});
+  if (domain) doc.text(`Domain: ${domain}`);
+  if (location) doc.text(`Location: ${location}`);
+  doc.text(`Week ending: ${fmtDate(latest)}`);
+  if (previous) doc.text(`Compared with: ${fmtDate(previous)}`);
   doc.moveDown();
 
   doc.fontSize(12).fillColor("#000");
-  doc.text(Tracked keywords: ${tracked});
+  doc.text(`Tracked keywords: ${tracked}`);
   doc.text(
-    Average position: ${avgCurrent.toFixed(1)} (prev ${avgPrev.toFixed(1)})
+    `Average position: ${avgCurrent.toFixed(1)} (prev ${avgPrev.toFixed(1)})`
   );
   doc.text(
-    Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)
+    `Top 10 visibility: ${top10Pct}% (prev ${top10PrevPct}%)`
   );
   doc.moveDown();
 
@@ -283,7 +281,9 @@ function buildSeoPdf(res, summary) {
   } else {
     topWinners.forEach((k) => {
       doc.text(
-        ${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (↑ ${k.change})
+        `${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (↑ ${
+          k.change
+        })`
       );
     });
   }
@@ -297,7 +297,9 @@ function buildSeoPdf(res, summary) {
   } else {
     topLosers.forEach((k) => {
       doc.text(
-        ${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (${k.change})
+        `${k.keyword} — ${k.previous ?? "-"} → ${k.current ?? "-"} (${
+          k.change
+        })`
       );
     });
   }
@@ -327,17 +329,17 @@ function buildSeoPdf(res, summary) {
       k.keyword.length > 30
         ? k.keyword.slice(0, 27) + "..."
         : k.keyword;
-    doc.text(${kw.padEnd(30)} ${prevStr}  ${currStr}  ${changeStr});
+    doc.text(`${kw.padEnd(30)} ${prevStr}  ${currStr}  ${changeStr}`);
   });
 
   doc.end();
 }
 
-// ---------- main handler ----------
-
+// ---- main handler ----
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
+      // health check
       return res
         .status(200)
         .json({ ok: true, message: "SEO reports API is alive" });
@@ -367,9 +369,9 @@ export default async function handler(req, res) {
     console.error("SEO report error:", err);
     if (!res.headersSent) {
       const msg = err && err.message ? err.message : String(err);
-      return res.status(500).json({
-        error: "Failed to generate SEO report: " + msg
-      });
+      return res
+        .status(500)
+        .json({ error: "Failed to generate SEO report: " + msg });
     }
   }
 }
