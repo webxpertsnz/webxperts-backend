@@ -9,6 +9,9 @@
 // - Extracts backlinks from the backlink sheets
 // - Generates a branded, human-readable PDF with pdfkit
 
+import path from "path";
+import fs from "fs";
+
 // ---------- Dynamic imports ----------
 async function getFormidable() {
   const mod = await import("formidable");
@@ -119,7 +122,7 @@ function parseRankingSheet(workbook) {
 
   // ---- Find date columns by scanning top rows ----
   const dateByCol = new Map(); // col -> { col, date, row }
-  const rowFreq = new Map();   // row -> count of date cells
+  const rowFreq = new Map(); // row -> count of date cells
 
   for (let r = 1; r <= maxHeaderRows; r++) {
     const row = sheet.getRow(r);
@@ -484,6 +487,10 @@ async function buildSeoPdf(res, summary) {
   const right = pageWidth - doc.page.margins.right;
   const contentWidth = right - left;
 
+  // Paths to hero + logo (adjust filenames if yours are different)
+  const heroPath = path.join(process.cwd(), "public", "seo-hero.jpg");
+  const logoPath = path.join(process.cwd(), "public", "webxperts-logo.png");
+
   const fmtPeriod = (info) => {
     if (!info) return "-";
     if (info.date) return info.date.toISOString().slice(0, 10);
@@ -498,13 +505,26 @@ async function buildSeoPdf(res, summary) {
   // PAGE 1 – HERO + HIGH LEVEL SUMMARY
   // ======================================================
 
-  // Hero band
   const heroHeight = 180;
-  doc
-    .save()
-    .rect(0, 0, pageWidth, heroHeight)
-    .fill(brandDark)
-    .restore();
+
+  if (fs.existsSync(heroPath)) {
+    // hero image with dark overlay
+    doc.image(heroPath, 0, 0, { width: pageWidth, height: heroHeight });
+    doc
+      .save()
+      .rect(0, 0, pageWidth, heroHeight)
+      .fillOpacity(0.5)
+      .fill(brandDark)
+      .fillOpacity(1)
+      .restore();
+  } else {
+    // fallback: solid band
+    doc
+      .save()
+      .rect(0, 0, pageWidth, heroHeight)
+      .fill(brandDark)
+      .restore();
+  }
 
   doc
     .fillColor("#ffffff")
@@ -609,6 +629,11 @@ async function buildSeoPdf(res, summary) {
 
     cardIndex++;
   });
+
+  // Logo near bottom-right of page 1 (if present)
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, right - 140, doc.page.height - 100, { width: 120 });
+  }
 
   // footer line on page 1
   doc
