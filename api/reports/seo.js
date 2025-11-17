@@ -33,9 +33,24 @@ async function parseForm(req) {
   });
 }
 
+// more robust: understands richText / hyperlink / formula objects too
 function parseHeaderDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
+
+  // ExcelJS structured objects
+  if (typeof value === "object" && value !== null) {
+    if (value.text) {
+      return parseHeaderDate(value.text);
+    }
+    if (value.result) {
+      return parseHeaderDate(value.result);
+    }
+    if (Array.isArray(value.richText)) {
+      const txt = value.richText.map((p) => p.text || "").join("");
+      return parseHeaderDate(txt);
+    }
+  }
 
   if (typeof value === "number") {
     // Excel serial date
@@ -44,10 +59,16 @@ function parseHeaderDate(value) {
     return isNaN(dt) ? null : dt;
   }
 
-  const text =
-    typeof value === "string"
-      ? value
-      : (value && value.text) ? value.text : "";
+  const text = String(value).trim();
+  if (!text) return null;
+
+  // Looks like some kind of date (e.g. 01/11/24, 2024-11-01, 20241101)
+  const looksLikeDate =
+    /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/.test(text) || // 2024-11-01 / 01/11/2024 etc
+    /^\d{8}$/.test(text) || // 20241101
+    /\d/.test(text) && (text.includes("/") || text.includes("-"));
+
+  if (!looksLikeDate) return null;
 
   const dt = new Date(text);
   return isNaN(dt) ? null : dt;
@@ -101,7 +122,6 @@ async function parseSeoWorkbook(filePath) {
   // Pass 2: fallback — pick the first "busy" row as header if still not found
   if (!headerRowNumber || !keywordCol) {
     let bestRow = null;
-    let bestCount = 0;
 
     for (let r = 1; r <= rankingSheet.rowCount; r++) {
       const row = rankingSheet.getRow(r);
@@ -114,7 +134,6 @@ async function parseSeoWorkbook(filePath) {
       }
       if (nonEmpty >= 3) {
         bestRow = r;
-        bestCount = nonEmpty;
         break;
       }
     }
@@ -141,7 +160,7 @@ async function parseSeoWorkbook(filePath) {
 
   const headerRow = rankingSheet.getRow(headerRowNumber);
 
-  // URL column & date columns from header row
+  // ---------- URL column & date columns from header row ----------
   let urlCol = null;
   const dateCols = [];
 
@@ -154,24 +173,40 @@ async function parseSeoWorkbook(filePath) {
       return;
     }
 
+    // Try to parse an actual date object from the header
     const dt = parseHeaderDate(raw);
     if (dt) {
-      dateCols.push({ col, date: dt });
+      dateCols.push({ col, date: dt, raw: raw });
+      return;
+    }
+
+    // If it looks date-ish but we couldn't parse into a Date,
+    // still treat it as a date column and rely on left-to-right order.
+    const txt = String(raw || "").trim();
+    if (txt && /\d/.test(txt) && (txt.includes("/") || txt.includes("-"))) {
+      dateCols.push({ col, date: null, raw: raw });
     }
   });
 
   if (!dateCols.length) {
     throw new Error(
       "No date-like headers found in the header row. " +
-        "Make sure your ranking sheet has dates as column headings (e.g. 2025-11-10)."
+        "Make sure your ranking sheet has date columns (e.g. 2025-11-10, 01/11/24)."
     );
   }
 
-  dateCols.sort((a, b) => a.date - b.date);
+  // Sort: if real dates exist, sort by them; otherwise just by column index
+  dateCols.sort((a, b) => {
+    if (a.date && b.date) return a.date - b.date;
+    if (a.date && !b.date) return -1;
+    if (!a.date && b.date) return 1;
+    return a.col - b.col;
+  });
+
   const latest = dateCols[dateCols.length - 1];
   const previous = dateCols.length >= 2 ? dateCols[dateCols.length - 2] : null;
 
-  // Collect keyword rows
+  // ---------- Collect keyword rows ----------
   const keywords = [];
   for (let r = headerRowNumber + 1; r <= rankingSheet.rowCount; r++) {
     const row = rankingSheet.getRow(r);
