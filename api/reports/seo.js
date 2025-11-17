@@ -5,7 +5,6 @@
 // - Accepts multipart/form-data with field "seo_file"
 // - Reads the SEO Excel workbook with exceljs
 // - Extracts ranking data from the "Ranking" sheet
-//   using the two right-most date columns
 // - Extracts backlinks from the backlink sheets
 // - Generates a branded, human-readable PDF with pdfkit
 
@@ -213,7 +212,6 @@ function parseRankingSheet(workbook) {
     let keyword = cellToString(kwVal).trim();
 
     if (!keyword) {
-      // if for some reason col A is empty, fall back to any text on the row
       for (let c = 1; c < latest.col; c++) {
         const txt = cellToString(row.getCell(c).value).trim();
         if (txt && txt.length > keyword.length) keyword = txt;
@@ -323,7 +321,6 @@ function parseRankingSheet(workbook) {
 
   return {
     domain,
-    location,
     latest,
     previous,
     tracked,
@@ -354,31 +351,37 @@ function parseBacklinkSheet(sheet, sheetName) {
   for (let r = 1; r <= Math.min(10, sheet.rowCount); r++) {
     const row = sheet.getRow(r);
     for (let c = 1; c <= row.cellCount; c++) {
-      const label = cellToString(row.getCell(c).value)
-        .trim()
-        .toLowerCase();
+      const raw = row.getCell(c).value;
+      const label = cellToString(raw).trim().toLowerCase();
       if (!label) continue;
 
-      if (!backlinkCol && label.includes("backlink")) {
+      // Prefer exact "backlinks" header; fall back to any cell containing "backlink"
+      if (label === "backlinks") {
+        backlinkCol = c;
+        headerRowNumber = r;
+      } else if (!backlinkCol && label.includes("backlink")) {
         backlinkCol = c;
         headerRowNumber = r;
       }
+
       if (
-        !targetCol &&
-        (label.includes("target") || label.includes("terget"))
+        label === "target url" ||
+        label === "target" ||
+        label === "terget url" ||
+        label === "terget"
       ) {
         targetCol = c;
         headerRowNumber = headerRowNumber || r;
       }
-      if (!statusCol && label.includes("status")) {
+
+      if (label === "status") {
         statusCol = c;
         headerRowNumber = headerRowNumber || r;
       }
     }
-    if (backlinkCol && targetCol && headerRowNumber) break;
   }
 
-  if (!headerRowNumber || !backlinkCol || !targetCol) {
+  if (!headerRowNumber || !backlinkCol) {
     return { name: sheetName, total: 0, rows: [] };
   }
 
@@ -386,7 +389,9 @@ function parseBacklinkSheet(sheet, sheetName) {
   for (let r = headerRowNumber + 1; r <= sheet.rowCount; r++) {
     const row = sheet.getRow(r);
     const backlink = cellToString(row.getCell(backlinkCol).value).trim();
-    const target = cellToString(row.getCell(targetCol).value).trim();
+    const target = targetCol
+      ? cellToString(row.getCell(targetCol).value).trim()
+      : "";
     const status = statusCol
       ? cellToString(row.getCell(statusCol).value).trim()
       : "";
@@ -667,39 +672,13 @@ async function buildSeoPdf(res, summary) {
   });
 
   const cardRows = Math.ceil(metricCards.length / cardsPerRow); // 1 row now
-  let yAfterCards =
+  const yAfterCards =
     cardTopY + cardRows * (cardHeight + cardGap) + 15;
 
-  // Google logo bottom-left (smaller) & WebXperts logo bottom-right
-  if (fs.existsSync(googleLogoPath)) {
-    doc.image(googleLogoPath, left, doc.page.height - 90, { width: 80 });
-  }
-
-  if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, right - 120, doc.page.height - 95, { width: 110 });
-  }
-
-  // footer line on page 1
-  doc
-    .moveTo(left, doc.page.height - 50)
-    .lineTo(right, doc.page.height - 50)
-    .strokeColor("#dddddd")
-    .lineWidth(1)
-    .stroke();
-
-  doc
-    .fontSize(9)
-    .fillColor("#777777")
-    .text(
-      "WebXperts SEO Report – generated automatically from your weekly ranking workbook.",
-      left,
-      doc.page.height - 45,
-      { width: contentWidth }
-    );
-
   // ======================================================
-  // EXECUTIVE SUMMARY (immediately under cards on page 1)
+  // EXECUTIVE SUMMARY (directly under cards on PAGE 1)
   // ======================================================
+
   doc.y = yAfterCards;
 
   doc
@@ -821,6 +800,35 @@ async function buildSeoPdf(res, summary) {
       doc.text("• " + line, { width: contentWidth });
     });
   }
+
+  // Logos + footer at bottom of current page (still page 1 in normal cases)
+  const googleLogoY = doc.page.height - 90;
+  const webxLogoY = doc.page.height - 95;
+
+  if (fs.existsSync(googleLogoPath)) {
+    doc.image(googleLogoPath, left, googleLogoY, { width: 80 });
+  }
+
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, right - 120, webxLogoY, { width: 110 });
+  }
+
+  doc
+    .moveTo(left, doc.page.height - 50)
+    .lineTo(right, doc.page.height - 50)
+    .strokeColor("#dddddd")
+    .lineWidth(1)
+    .stroke();
+
+  doc
+    .fontSize(9)
+    .fillColor("#777777")
+    .text(
+      "WebXperts SEO Report – generated automatically from your weekly ranking workbook.",
+      left,
+      doc.page.height - 45,
+      { width: contentWidth }
+    );
 
   // ======================================================
   // KEYWORD LIST TABLE (like screenshot)
