@@ -1,6 +1,5 @@
 // api/reports/seo.js
 // Minimal test: return JSON on GET and a tiny PDF on POST.
-// No Excel parsing yet – this is just to prove the pipeline works.
 
 import PDFDocument from "pdfkit";
 
@@ -40,7 +39,7 @@ export default async function handler(req, res) {
     if (!res.headersSent) {
       return res.status(500).json({
         error: "Failed in SEO test endpoint",
-        detail: err.message || String(err),
+        detail: err.message || String(err)
       });
     }
   }
