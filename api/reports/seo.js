@@ -355,13 +355,14 @@ export default async function handler(req, res) {
 
     // If parsing succeeds, stream PDF back
     buildSeoPdf(res, summary);
-  } catch (err) {
+    } catch (err) {
     console.error("SEO report error:", err);
     if (!res.headersSent) {
+      const msg = err && err.message ? err.message : String(err);
       return res.status(500).json({
-        error: "Failed to generate SEO report",
-        detail: err.message || String(err)
+        error: "Failed to generate SEO report: " + msg
       });
     }
   }
 }
+
