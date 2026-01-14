@@ -689,7 +689,7 @@ async function buildSeoPdf(res, summary) {
 
   if (hasPrevData && performanceDeltaPct > 0) {
     doc.text(
-      `This month’s SEO performance shows ${performanceTrend} in key metrics. ` +
+      `This weeks SEO performance shows ${performanceTrend} in key metrics. ` +
         `Performance ${performanceDirection} by approximately ${performanceDeltaPct}% compared to last week.`,
       { width: contentWidth }
     );
