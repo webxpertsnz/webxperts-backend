@@ -695,7 +695,7 @@ async function buildSeoPdf(res, summary) {
     );
   } else {
     doc.text(
-      "This month’s SEO performance establishes a baseline for ongoing tracking. Previous-week comparison data is not available in this workbook.",
+      "This weeks SEO performance establishes a baseline for ongoing tracking.",
       { width: contentWidth }
     );
   }
